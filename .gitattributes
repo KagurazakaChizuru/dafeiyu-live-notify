@@ -1,0 +1,15 @@
+# 统一换行符，避免不同系统 clone 下来行为不一致
+* text=auto
+
+# .bat 必须是 CRLF —— cmd.exe 对 LF 结尾的批处理在 goto/label 上有已知怪癖
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 代码和文档统一 LF
+*.py  text eol=lf
+*.md  text eol=lf
+*.json text eol=lf
+
+# 图标是二进制，别做任何转换
+*.ico binary
+*.png binary

@@ -1,0 +1,48 @@
+{
+  "onebot": {
+    "base_url": "http://127.0.0.1:3000",
+    "access_token": "",
+    "timeout": 10
+  },
+  "groups": [
+    {
+      "group_id": 123456789,
+      "enabled": true,
+      "at_all": true,
+      "at_list": [],
+      "note": "改成你自己的群号"
+    }
+  ],
+  "watch": {
+    "enabled": true,
+    "interval_seconds": 5,
+    "processes": [
+      "obs64.exe",
+      "直播伴侣.exe",
+      "直播伴侣 launcher.exe",
+      "livehime.exe"
+    ],
+    "confirm_checks": 2,
+    "stop_grace_seconds": 60
+  },
+  "message": {
+    "template": "🔴 开播了！\n\n{title}\n{link}\n\n大家快来捧场～",
+    "title": "今晚直播",
+    "link": "https://live.bilibili.com/YOUR_ROOM_ID"
+  },
+  "behavior": {
+    "cooldown_minutes": 30,
+    "send_interval_seconds": 3,
+    "dry_run": false
+  },
+  "trigger": {
+    "on_process_start": false,
+    "on_obs_stream": true,
+    "hotkey": "ctrl+alt+k"
+  },
+  "control": {
+    "enabled": true,
+    "port": 8899,
+    "token": ""
+  }
+}
