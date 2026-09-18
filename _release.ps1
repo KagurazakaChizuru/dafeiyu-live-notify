@@ -60,7 +60,10 @@ Write-Host "body extracted from CHANGELOG: $($body.Length) chars"
 
 # Title = first line of the section, trailing punctuation trimmed, capped.
 # The unicode escapes keep this file ASCII-only.
+# Strip a leading '###' first: newer CHANGELOG sections open with a '### heading',
+# and without this the release title reads "1.6.5 -- ### easter egg".
 $firstLine = ($body -split "`n")[0].Trim()
+$firstLine = $firstLine -replace '^#+\s*', ''
 $firstLine = $firstLine -replace '[\u3002\uFF01\uFF0C\uFF1B.,!;]+$', ''
 if ($firstLine.Length -gt 40) { $firstLine = $firstLine.Substring(0, 40) + [char]0x2026 }
 $dash = [string][char]0x2014 + [string][char]0x2014
