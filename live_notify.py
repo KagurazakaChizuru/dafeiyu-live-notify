@@ -50,9 +50,24 @@ except ImportError:                # 缺文件时通知里就不带游戏名
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def _resolve_base_dir():
+    """确定**数据目录**（config.json / logs / napcat 所在处）。
+
+    打包成 exe 之后，`__file__` 指向的是 PyInstaller 解包出来的**临时目录**，
+    程序一退出就删掉了。日志要是写在那里，等于从来没写过 —— 用户点
+    「打开日志文件夹」会发现里面只有源码运行时的旧记录，出了问题无从查证。
+
+    所以必须相对 **exe 自身** 解析。gui.py 里有一份同样的逻辑
+    （`_resolve_data_dir`），两边算出来必须是同一个目录。
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "app")
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+BASE_DIR = _resolve_base_dir()
 DEFAULT_CONFIG = os.path.join(BASE_DIR, "config.json")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 

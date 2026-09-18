@@ -84,8 +84,12 @@ try {
         if (Test-Path $p) { Copy-Item $p -Destination $pkgRoot -Force }
     }
 
-    # app\ = this repo, minus everything private or third-party
-    $denyDirs = @('.git', '.github', 'dist', 'napcat', 'qq-napcat',
+    # app\ = this repo, minus everything private or third-party.
+    # 'build' is PyInstaller's work directory - it contains a copy of the whole
+    # app (.pkg, .pyz, .toc) and adds ~12 MB to the zip for no reason. It is
+    # gitignored, so it only ever lands here when the exe was built inside the
+    # repo, which is exactly what happened once.
+    $denyDirs = @('.git', '.github', 'dist', 'build', 'napcat', 'qq-napcat',
                   'qq-napcat-private', 'logs', '__pycache__', '_qqcopy_test')
     $denyFiles = @('config.json', '_account.txt', 'gui-error.log',
                    '.gitignore', '.gitattributes')

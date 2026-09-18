@@ -15,15 +15,19 @@
 OCR 要截图、会认错字、还得把屏幕内容送去识别，代价远大于收益。
 真到窗口标题也认不出的时候再说 —— 那是最后兜底，不是主力。
 
-五层识别，从准到兜底
---------------------
-1. **手工映射表**   配置里写的，你说了算，最高优先
+四层识别，从准到兜底（外加一层没做的）
+--------------------------------------
+1. **手工映射表**   配置里写的（``game.names``），你说了算，最高优先
 2. **场景字典**     直播姬 / OBS 的场景文件里，你自己配过的游戏捕获源。
                     它们的格式是 ``<窗口标题>:<窗口类>:<exe名>``，
                     等于一份你自己维护出来的游戏清单，白捡的。
 3. **平台库**       Steam appmanifest / WeGame rail_apps 的安装目录 → 游戏名
 4. **窗口标题**     清洗后直接当名字用（大部分游戏这层就中了）
-5. **exe 版本信息** exe 自带的产品名（《战舰世界》就靠这层）
+
+> **还没做的一层**：读 exe 自带的产品名（PE 版本资源）。原计划作为第 5 层兜底，
+> 但实测发现反作弊游戏（三角洲这类）进程受保护、连 exe 路径都读不到，
+> 而这层恰好最需要它；读得到的那些游戏，窗口标题或场景字典早就命中了。
+> 收益太低，暂时搁置 —— 所以**别指望它**，认不出来就写进 ``game.names``。
 
 全是本机读文件 + Win32 调用，不联网、不截图。
 """
@@ -519,31 +523,38 @@ def build_index(force=False):
     return index
 
 
-_RULES_CACHE = {"at": 0.0, "names": {}, "ignore": set()}
+_RULES_CACHE = {"key": None, "names": {}, "ignore": set()}
 
 
 def game_rules(cfg):
-    """配置里的手工映射表和忽略名单，五分钟内复用。
+    """配置里的手工映射表和忽略名单，内容没变就复用。
 
     ``game.names``  形如 ``{"farcry6.exe": "孤岛惊魂6"}``，最高优先。
     ``game.ignore`` 形如 ``["vtube studio.exe"]`` —— 有些东西长得像游戏
                     但不是（虚拟形象软件、剪辑软件），列进来就永远不报。
+
+    缓存按**内容**判定，不是按时间：按时间的话，五分钟内换了配置也不会
+    重新读，测试和"改完配置立刻重开监控"都会踩到。
     """
-    now = time.time()
-    if now - _RULES_CACHE["at"] < _GAME_CACHE_TTL:
-        return _RULES_CACHE["names"], _RULES_CACHE["ignore"]
-    names, ignore = {}, set()
     game_cfg = (cfg or {}).get("game") or {}
-    for key, val in (game_cfg.get("names") or {}).items():
-        k = clean_title(key).lower()
-        v = clean_title(val)
+    names_raw = game_cfg.get("names") or {}
+    ignore_raw = game_cfg.get("ignore") or []
+    key = (tuple(sorted((str(k).lower(), str(v)) for k, v in names_raw.items())),
+           tuple(sorted(str(x).lower() for x in ignore_raw)))
+    if _RULES_CACHE["key"] == key:
+        return _RULES_CACHE["names"], _RULES_CACHE["ignore"]
+
+    names, ignore = {}, set()
+    for k, v in names_raw.items():
+        k = clean_title(k).lower()
+        v = clean_title(v)
         if k and v:
             names[k] = v
-    for item in (game_cfg.get("ignore") or []):
+    for item in ignore_raw:
         k = clean_title(item).lower()
         if k:
             ignore.add(k)
-    _RULES_CACHE["at"] = now
+    _RULES_CACHE["key"] = key
     _RULES_CACHE["names"] = names
     _RULES_CACHE["ignore"] = ignore
     return names, ignore

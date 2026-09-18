@@ -19,16 +19,37 @@
     "processes": [
       "obs64.exe",
       "直播伴侣.exe",
-      "直播伴侣 launcher.exe",
       "livehime.exe"
     ],
     "confirm_checks": 2,
     "stop_grace_seconds": 60
   },
   "message": {
-    "template": "🔴 开播了！\n\n{title}\n{link}\n\n大家快来捧场～",
+    "template": "🔴 开播了！\n\n{title}\n正在玩《{game}》\n{link}\n\n大家快来捧场～",
+    "templates": [],
     "title": "今晚直播",
-    "link": "https://live.bilibili.com/YOUR_ROOM_ID"
+    "link": "https://live.bilibili.com/YOUR_ROOM_ID",
+    "cover": true,
+    "cover_size": [200, 112]
+  },
+  "game": {
+    "enabled": true,
+    "names": {
+      "farcry6.exe": "孤岛惊魂6"
+    },
+    "ignore": [
+      "vtube studio.exe"
+    ],
+    "announce_change": true,
+    "change_template": "换游戏了，现在打《{game}》",
+    "change_cooldown_minutes": 5
+  },
+  "reminder": {
+    "enabled": true,
+    "after_minutes": [30, 60],
+    "max_total": 3,
+    "template": "还在播～\n\n{title}\n正在玩《{game}》\n{link}",
+    "at_all": false
   },
   "offline_message": {
     "enabled": true,
@@ -55,5 +76,8 @@
     "enabled": true,
     "port": 8899,
     "token": ""
+  },
+  "ui": {
+    "theme": "light"
   }
 }

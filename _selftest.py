@@ -147,6 +147,91 @@ def run_engine_tests(path):
     return failures
 
 
+def run_games_tests():
+    """games.py 的纯逻辑测试。
+
+    不打桩、不造窗口、不要求有游戏在跑 —— 只测那些「输入确定、输出就该确定」
+    的部分：标题清洗、通用源名判断、窗口串解析，以及认不出来时别抛异常。
+
+    窗口打分那套依赖真实桌面，不在这里测（那是要人眼看的）。
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    try:
+        import games
+    except ImportError as exc:
+        check("games.py 能否导入", False, str(exc))
+        return failures
+
+    # ---- 标题清洗 ----
+    # 有些启动器把标题写成 C<ZWSP>a<ZWSP>l<ZWSP>l，不过滤的话群里会收到
+    # 一串看不见的乱码
+    zwsp = "\u200b"
+    dirty = "C{}a{}l{}l of Duty".format(zwsp, zwsp, zwsp)
+    check("清掉零宽字符", games.clean_title(dirty) == "Call of Duty",
+          repr(games.clean_title(dirty)))
+    check("去掉书名号", games.clean_title("《战舰世界》") == "战舰世界",
+          repr(games.clean_title("《战舰世界》")))
+    check("去掉商标符号", games.clean_title("FarCry\u00ae6") == "FarCry6",
+          repr(games.clean_title("FarCry\u00ae6")))
+    check("去首尾空白并压掉连续空格",
+          games.clean_title("  三角洲行动  ") == "三角洲行动",
+          repr(games.clean_title("  三角洲行动  ")))
+    check("空输入不炸", games.clean_title(None) == "" and games.clean_title("") == "")
+
+    # ---- 通用源名判断 ----
+    # 直播姬里没改过名的源就叫「游戏进程 3」，遇到这类得改用窗口标题
+    for generic in ("游戏进程 3", "窗口捕捉 1", "游戏源", "窗口采集"):
+        check("认得出通用源名：{}".format(generic), games._is_generic_source(generic))
+    for real in ("战争雷霆", "《战舰世界》", "Battlefield Labs"):
+        check("不误判真名：{}".format(real), not games._is_generic_source(real))
+
+    # ---- 场景文件里的窗口串 ----
+    parsed = games._split_window_spec(
+        "三角洲行动:UnrealWindow:DeltaForceClient-Win64-Shipping.exe")
+    check("解析 <标题>:<类>:<exe>",
+          parsed == ("三角洲行动", "UnrealWindow",
+                     "deltaforceclient-win64-shipping.exe"), repr(parsed))
+    two = games._split_window_spec("A:B:C:Cls:x.exe")
+    check("标题里带冒号也能解析", bool(two) and two[0] == "A:B:C", repr(two))
+    for bad in ("", "没有冒号", "只有两段:类", "标题:类:不是exe.txt", None):
+        check("拒绝畸形输入：{!r}".format(bad),
+              games._split_window_spec(bad) is None,
+              repr(games._split_window_spec(bad)))
+
+    # ---- 配置里的两张表 ----
+    names, ignore = games.game_rules({
+        "game": {"names": {"FarCry6.exe": "孤岛惊魂6"},
+                 "ignore": ["VTube Studio.exe"]}})
+    check("手工映射表名字统一小写", names.get("farcry6.exe") == "孤岛惊魂6",
+          repr(names))
+    check("忽略名单名字统一小写", "vtube studio.exe" in ignore, repr(ignore))
+    # 换一份配置要立刻生效（缓存按内容判定，不是按时间）
+    names2, _ = games.game_rules({"game": {"names": {"cod.exe": "使命召唤"}}})
+    check("换了配置立刻生效", names2.get("cod.exe") == "使命召唤", repr(names2))
+
+    # ---- 认不出来也不能抛 ----
+    cfg = {"game": {"enabled": True, "names": {}, "ignore": []}}
+    res = games.detect(cfg)
+    check("detect 返回结构完整",
+          isinstance(res, dict) and "name" in res and "window" in res, repr(res))
+    check("detect 的 name 要么是字符串要么是 None",
+          res.get("name") is None or isinstance(res.get("name"), str), repr(res))
+
+    idx = games.build_index(force=True)
+    check("build_index 结构完整",
+          isinstance(idx.get("by_exe"), dict) and isinstance(idx.get("by_path"), list),
+          repr(type(idx)))
+
+    return failures
+
+
 def main():
     live_notify._setup_console()          # 先切 UTF-8，否则中文输出会乱码
     path = make_config()
@@ -170,19 +255,24 @@ def main():
     httpd.shutdown()
 
     print("\n" + "#" * 70)
-    print("# 4/4  触发引擎状态机")
+    print("# 4/5  触发引擎状态机")
     print("#" * 70)
     failures = run_engine_tests(path)
+
+    print("\n" + "#" * 70)
+    print("# 5/5  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("#" * 70)
+    failures += run_games_tests()
 
     print("\n" + "=" * 70)
     print("命令退出码：check={check}  test={test}  send={send}".format(**results))
     print("（check 返回 1 是预期的：333333333 是普通成员却要求 @全体成员，应当报警）")
     if failures:
-        print("\n引擎测试失败 {} 项：".format(len(failures)))
+        print("\n失败 {} 项：".format(len(failures)))
         for f in failures:
             print("  - " + f)
     else:
-        print("引擎测试全部通过。")
+        print("全部通过。")
     print("=" * 70)
 
     try:

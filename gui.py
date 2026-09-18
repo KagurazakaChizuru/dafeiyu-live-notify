@@ -85,26 +85,111 @@ def pick_log_font():
     return FONT
 
 # --------------------------------------------------------------------------
-#  配色 —— 跟图标统一（深蓝 + 亮黄）
+#  配色 —— 参考 Flyme：素雅、从自然取色、圆角温和、**设计不喧宾夺主**
 # --------------------------------------------------------------------------
-BG        = "#EDF2FA"      # 窗口底色
-CARD      = "#FFFFFF"      # 卡片底
-BORDER    = "#D6E1F1"      # 卡片描边
-HEAD_BG   = "#2E4E8F"      # 顶部横幅
-TEXT      = "#1B2A41"
-MUTED     = "#6B7C93"
-PRIMARY   = "#2F5FA8"      # 主蓝
-PRIMARY_D = "#254C89"
-ACCENT    = "#F5B301"      # 喇叭黄
-OK_COLOR  = "#1E7A4D"
-WARN      = "#B26A00"
-BAD_COLOR = "#C0392B"
+#  这是第三版配色了，前两版的毛病是一样的：**拿背景和按钮抢戏**。
+#  第一版冷蓝灰像工程软件，第二版换成一整块高饱和紫渐变 + 一个 92px 的
+#  巨大按钮，更吵。Flyme 的设计页把话说得很直白：
+#
+#      「突显内容 —— 精妙的设计不应喧宾夺主」
+#      「恰到好处的圆角 —— 少了些许锋锐，多了一丝温和」
+#
+#  所以这一版落到三条：
+#    1. 大面积底色是**中性**灰白，不带明显色相
+#    2. 主色只出现在真正要引导视线的地方（一个动作按钮、一个选中态），
+#       不铺满界面
+#    3. 分层靠发丝级描边和留白，不靠粗边框和重阴影
+#
+#  深色模式参考 Flyme「夜间模式 2.0」：深邃但不纯黑，而且**越靠上的层越亮**
+#  （BG 最暗 → 卡片略亮）。纯黑配纯白对比过强，看久了累。
+# --------------------------------------------------------------------------
 
-# 兼容旧名字（其它方法里还在用）
-BLUE = PRIMARY
-BLUE_DARK = PRIMARY_D
-RED = "#D64545"
-RED_DARK = "#B53434"
+THEMES = {
+    "light": {
+        "BG":        "#F5F6F8",   # 窗口底：中性浅灰
+        "CARD":      "#FFFFFF",
+        "SUNKEN":    "#FAFAFC",   # 比卡片暗一档：表头、次级条
+        "BORDER":    "#E8E9ED",
+        "TEXT":      "#17181C",
+        "MUTED":     "#8A8D96",
+        "PRIMARY":   "#3D7BF7",   # Flyme 蓝
+        "PRIMARY_D": "#2F66D8",
+        "PRIMARY_S": "#EBF2FE",   # 主色的浅底：选中行、悬停
+        "ACCENT":    "#F5A623",
+        "OK":        "#22A06B",
+        "WARN":      "#C77A10",
+        "BAD":       "#E5484D",
+        "OK_S":      "#E9F6F0",
+        "WARN_S":    "#FDF3E3",
+        "BAD_S":     "#FDECEC",
+        "LOG_BG":    "#1B1D22",
+        "LOG_FG":    "#D7DAE3",
+        "LOG_BAR":   "#3A3E48",
+    },
+    "dark": {
+        "BG":        "#111216",   # 深邃，不是纯黑
+        "CARD":      "#1A1C21",
+        "SUNKEN":    "#15161A",
+        "BORDER":    "#2A2D35",
+        "TEXT":      "#E9EAEE",
+        "MUTED":     "#8B8E99",
+        "PRIMARY":   "#5B8DF5",   # 夜间把主色提亮，否则在深底上发闷
+        "PRIMARY_D": "#4A7BE0",
+        "PRIMARY_S": "#1E2739",
+        "ACCENT":    "#F0A93B",
+        "OK":        "#3DCB8F",
+        "WARN":      "#E0A345",
+        "BAD":       "#F06A6F",
+        "OK_S":      "#16281F",
+        "WARN_S":    "#2A2115",
+        "BAD_S":     "#2C1A1C",
+        "LOG_BG":    "#0C0D10",
+        "LOG_FG":    "#C9CDD8",
+        "LOG_BAR":   "#2E323B",
+    },
+}
+
+THEME_NAMES = ("light", "dark")
+THEME = "light"
+
+
+def apply_theme(name):
+    """把选中的主题写进模块全局，之后创建的控件就用这些颜色。
+
+    颜色是在**创建控件时**写死进去的，所以换主题必须重建界面，没有
+    「重新着色」这条路 —— 见 App.rebuild_ui()。启动时则在建界面**之前**
+    先调用这里，否则会先按默认主题闪一下。
+    """
+    global THEME, BG, CARD, SUNKEN, BORDER, TEXT, MUTED
+    global PRIMARY, PRIMARY_D, PRIMARY_S, ACCENT
+    global OK_COLOR, WARN, BAD_COLOR, OK_S, WARN_S, BAD_S
+    global LOG_BG, LOG_FG, LOG_BAR
+    global HEAD_TEXT, HEAD_DIM, HEAD_OK, HEAD_BAD, HEAD_WARN
+    global BLUE, BLUE_DARK, RED, RED_DARK
+
+    THEME = name if name in THEMES else "light"
+    t = THEMES[THEME]
+
+    BG, CARD, SUNKEN, BORDER = t["BG"], t["CARD"], t["SUNKEN"], t["BORDER"]
+    TEXT, MUTED = t["TEXT"], t["MUTED"]
+    PRIMARY, PRIMARY_D, PRIMARY_S = t["PRIMARY"], t["PRIMARY_D"], t["PRIMARY_S"]
+    ACCENT = t["ACCENT"]
+    OK_COLOR, WARN, BAD_COLOR = t["OK"], t["WARN"], t["BAD"]
+    OK_S, WARN_S, BAD_S = t["OK_S"], t["WARN_S"], t["BAD_S"]
+    LOG_BG, LOG_FG, LOG_BAR = t["LOG_BG"], t["LOG_FG"], t["LOG_BAR"]
+
+    # 头部不再是深色块了，直接用主题自身的文字色
+    HEAD_TEXT = TEXT
+    HEAD_DIM = MUTED
+    HEAD_OK, HEAD_BAD, HEAD_WARN = t["OK"], t["BAD"], t["WARN"]
+
+    # 兼容旧名字（别的地方还在用）
+    BLUE, BLUE_DARK = PRIMARY, PRIMARY_D
+    RED, RED_DARK = BAD_COLOR, t["BAD"]
+    return t
+
+
+apply_theme("light")
 
 ROLE_CN = {"owner": "群主", "admin": "管理员", "member": "普通成员"}
 
@@ -218,6 +303,132 @@ class ScrollFrame(tk.Frame):
         else:
             return
         self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+
+def mix(c1, c2, t):
+    """两个 #rrggbb 之间取插值。t=0 返回 c1，t=1 返回 c2。"""
+    a = tuple(int(c1[i:i + 2], 16) for i in (1, 3, 5))
+    b = tuple(int(c2[i:i + 2], 16) for i in (1, 3, 5))
+    return "#{:02x}{:02x}{:02x}".format(
+        *[int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3)])
+
+
+def paint_gradient(canvas, width, height, c1, c2, tag="bg"):
+    """在 Canvas 上刷一层竖向渐变。
+
+    一行画一条线就够了 —— 一百多条，比造 PhotoImage 简单得多，也不慢。
+    纯色块的横幅看着像控制面板，渐变更像正经软件，这是「不那么工科」
+    最省力的一笔。
+    """
+    canvas.delete(tag)
+    span = max(1, height - 1)
+    for y in range(height):
+        canvas.create_line(0, y, width, y, fill=mix(c1, c2, y / span), tags=tag)
+
+
+class CanvasLabel:
+    """把 Canvas 上的文字项包装成 tk.Label 的样子。
+
+    这样 `self.lbl_xxx.config(text=..., foreground=...)` 这类调用一行都不用改 ——
+    状态刷新逻辑有好几处，全改一遍既啰嗦又容易漏。
+    """
+
+    def __init__(self, canvas, item):
+        self.canvas = canvas
+        self.item = item
+
+    def config(self, **kw):
+        if "text" in kw:
+            self.canvas.itemconfig(self.item, text=kw["text"])
+        if "foreground" in kw:
+            self.canvas.itemconfig(self.item, fill=kw["foreground"])
+
+    configure = config
+
+    def cget(self, key):
+        return self.canvas.itemcget(self.item, "text") if key == "text" else ""
+
+
+class RoundedButton(tk.Canvas):
+    """圆角按钮。
+
+    tk.Button 画不出圆角，而圆角是现代感最直接的一笔。这里用两个矩形 +
+    四个圆角拼出来 —— Tk 的经典做法，不需要图片、不需要第三方库。
+
+    对外接口刻意做成跟 tk.Button 一样（`config(text=..., background=...)`），
+    这样调用方不用改。
+    """
+
+    def __init__(self, parent, text, command, font_spec, height=88,
+                 radius=20, fill=PRIMARY, fill_active=PRIMARY_D,
+                 background=BG):
+        super().__init__(parent, height=height, background=background,
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self._text = text
+        self._command = command
+        self._font = font_spec
+        self._radius = radius
+        self._base = fill
+        self._active = fill_active
+        self._shape = []
+        self._label = None
+        self._enabled = True
+
+        self.bind("<Configure>", lambda e: self._redraw())
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Enter>", lambda e: self._paint(self._active))
+        self.bind("<Leave>", lambda e: self._paint(self._base))
+
+    def _on_click(self, _event=None):
+        if self._enabled and self._command:
+            self._command()
+
+    def _redraw(self):
+        w = self.winfo_width()
+        h = self.winfo_height()
+        if w < 4 or h < 4:
+            return
+        r = max(0, min(self._radius, h // 2 - 1))
+        x1, y1, x2, y2 = 1, 1, w - 1, h - 1
+        kw = {"outline": "", "fill": self._base}
+        self.delete("all")
+        self._shape = [
+            self.create_oval(x1, y1, x1 + 2 * r, y1 + 2 * r, **kw),
+            self.create_oval(x2 - 2 * r, y1, x2, y1 + 2 * r, **kw),
+            self.create_oval(x1, y2 - 2 * r, x1 + 2 * r, y2, **kw),
+            self.create_oval(x2 - 2 * r, y2 - 2 * r, x2, y2, **kw),
+            self.create_rectangle(x1 + r, y1, x2 - r, y2, **kw),
+            self.create_rectangle(x1, y1 + r, x2, y2 - r, **kw),
+        ]
+        self._label = self.create_text((x1 + x2) // 2, (y1 + y2) // 2,
+                                       text=self._text, fill="white",
+                                       font=self._font)
+
+    def _paint(self, color):
+        if not self._enabled:
+            return
+        self._base = color
+        for item in self._shape:
+            self.itemconfig(item, fill=color)
+
+    def config(self, **kw):
+        if "text" in kw:
+            self._text = kw["text"]
+            if self._label:
+                self.itemconfig(self._label, text=kw["text"])
+        if "background" in kw:
+            self._base = kw["background"]
+            self._active = kw.get("activebackground") or kw["background"]
+            for item in self._shape:
+                self.itemconfig(item, fill=self._base)
+        if "state" in kw:
+            self._enabled = kw["state"] != "disabled"
+            self.config_cursor("hand2" if self._enabled else "arrow")
+
+    configure = config
+
+    def config_cursor(self, cursor):
+        tk.Canvas.config(self, cursor=cursor)
 
 
 def set_window_icon(root):
@@ -382,11 +593,27 @@ def wait_for_port(port, seconds, should_cancel=None):
 # --------------------------------------------------------------------------
 
 class App:
+    @staticmethod
+    def _peek_theme():
+        """建界面**之前**先单独读一次主题偏好。
+
+        配置本来要等 _build_ui 之后才读（界面才是它的消费者），但控件颜色
+        是创建时写死的 —— 晚一步就得整个重建一次，启动时会明显闪一下。
+        读不到或读坏了都退回浅色，不能因为一个偏好设置让程序起不来。
+        """
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8-sig") as fh:
+                return (json.load(fh).get("ui") or {}).get("theme") or "light"
+        except Exception:
+            return "light"
+
     def __init__(self, root):
         self.root = root
         self.root.title("大肥鱼直播姬")
         self.root.geometry("980x760")
         self.root.minsize(900, 660)
+
+        apply_theme(self._peek_theme())
         self.root.configure(background=BG)
         set_window_icon(self.root)
 
@@ -395,9 +622,11 @@ class App:
         self.stop_event = None
         self.monitor_thread = None
         self.log_queue = queue.Queue()
+        self.log_tail = []           # 换主题要重建界面，用它把日志接回来
         self.available_groups = []
         self.role_of = {}
         self._recovering = False     # 正在自动重启 NapCat？
+        self._theming = False        # 正在重建界面换主题？（防重入）
 
         self._build_ui()
 
@@ -445,13 +674,13 @@ class App:
         style.configure("Muted.TLabel", background=CARD, foreground=MUTED)
 
         # 按钮
-        style.configure("TButton", background="#DFE8F5", foreground=TEXT,
+        style.configure("TButton", background=SUNKEN, foreground=TEXT,
                         borderwidth=0, focusthickness=0, padding=(12, 7),
                         font=(FONT, 9), relief="flat")
         style.map("TButton",
-                  background=[("pressed", "#C6D6EC"), ("active", "#D2DFF0"),
-                              ("disabled", "#EBEFF5")],
-                  foreground=[("disabled", "#A8B3C2")])
+                  background=[("pressed", BORDER), ("active", PRIMARY_S),
+                              ("disabled", BG)],
+                  foreground=[("disabled", MUTED)])
         style.configure("Primary.TButton", background=PRIMARY, foreground="white",
                         borderwidth=0, padding=(14, 8), font=(FONT, 9, "bold"),
                         relief="flat")
@@ -459,13 +688,13 @@ class App:
                   background=[("pressed", PRIMARY_D), ("active", PRIMARY_D)])
 
         # 输入类控件
-        style.configure("TEntry", fieldbackground="white", foreground=TEXT,
+        style.configure("TEntry", fieldbackground=CARD, foreground=TEXT,
                         bordercolor=BORDER, lightcolor=BORDER, darkcolor=BORDER,
                         borderwidth=1, padding=5)
-        style.configure("TSpinbox", fieldbackground="white", foreground=TEXT,
+        style.configure("TSpinbox", fieldbackground=CARD, foreground=TEXT,
                         bordercolor=BORDER, arrowcolor=PRIMARY, borderwidth=1,
                         padding=3)
-        style.configure("TCombobox", fieldbackground="white", background="white",
+        style.configure("TCombobox", fieldbackground=CARD, background=CARD,
                         bordercolor=BORDER, arrowcolor=PRIMARY, padding=4)
 
         # 复选框
@@ -477,100 +706,135 @@ class App:
 
         # 标签页
         style.configure("TNotebook", background=BG, borderwidth=0,
-                        tabmargins=(6, 6, 6, 0))
-        style.configure("TNotebook.Tab", background="#DAE4F2", foreground=MUTED,
-                        padding=(20, 10), borderwidth=0, font=(FONT, 10))
+                        tabmargins=(8, 8, 8, 0),
+                        bordercolor=BG, lightcolor=BG, darkcolor=BG)
+        style.configure("TNotebook.Tab", background=SUNKEN, foreground=MUTED,
+                        padding=(22, 11), borderwidth=0, font=(FONT, 10))
         style.map("TNotebook.Tab",
-                  background=[("selected", CARD), ("active", "#E7EEF9")],
+                  background=[("selected", CARD), ("active", PRIMARY_S)],
                   foreground=[("selected", PRIMARY)])
 
         # 表格
         style.configure("Treeview", background=CARD, fieldbackground=CARD,
-                        foreground=TEXT, rowheight=27, borderwidth=0,
+                        foreground=TEXT, rowheight=28, borderwidth=0,
                         font=(FONT, 9))
-        style.configure("Treeview.Heading", background="#E4EBF7",
-                        foreground=PRIMARY, font=(FONT, 9, "bold"),
-                        borderwidth=0, padding=(6, 6))
+        style.configure("Treeview.Heading", background=SUNKEN,
+                        foreground=MUTED, font=(FONT, 9, "bold"),
+                        borderwidth=0, padding=(6, 7))
         style.map("Treeview",
-                  background=[("selected", "#CFE0F7")],
+                  background=[("selected", PRIMARY_S)],
                   foreground=[("selected", TEXT)])
-        style.map("Treeview.Heading", background=[("active", "#D8E3F5")])
+        style.map("Treeview.Heading", background=[("active", BORDER)])
 
         # 滚动条
         for orient in ("Vertical", "Horizontal"):
             style.configure("{}.TScrollbar".format(orient),
-                            background="#D5E0F0", troughcolor=BG,
-                            bordercolor=BG, arrowcolor=PRIMARY, borderwidth=0)
+                            background=BORDER, troughcolor=BG,
+                            bordercolor=BG, arrowcolor=MUTED, borderwidth=0)
         # 日志区是深色的，滚动条得跟着一起深，不然整块黑里插一条白杠
-        style.configure("Log.Vertical.TScrollbar", background="#3B4A66",
-                        troughcolor="#151B26", bordercolor="#151B26",
-                        arrowcolor="#8FA3C4", borderwidth=0, arrowsize=12)
+        style.configure("Log.Vertical.TScrollbar", background=LOG_BAR,
+                        troughcolor=LOG_BG, bordercolor=LOG_BG,
+                        arrowcolor=MUTED, borderwidth=0, arrowsize=12)
         style.map("Log.Vertical.TScrollbar",
                   background=[("active", PRIMARY), ("pressed", PRIMARY_D)])
 
-    def _hover_main(self, on):
-        """大按钮的悬停反馈（tk.Button 不认 activebackground 的鼠标进出）。"""
-        base = {STATE_IDLE: PRIMARY, STATE_RUNNING: RED}.get(self.state)
-        if base is None:
+    def _head_resized(self, _event=None):
+        """窗口宽度变了就重刷横幅。
+
+        渐变是一行画一条线刷出来的，拖动窗口边框时 Configure 会疯狂触发，
+        所以 debounce 一下 —— 不然拖起来会卡。
+        """
+        if self._head_job:
+            try:
+                self.root.after_cancel(self._head_job)
+            except Exception:
+                pass
+        self._head_job = self.root.after(60, self._paint_header)
+
+    def _paint_header(self):
+        self._head_job = None
+        w = self.head.winfo_width()
+        h = self.head.winfo_height()
+        if w < 4 or h < 4:
             return
-        dark = {PRIMARY: PRIMARY_D, RED: RED_DARK}.get(base, base)
-        self.btn_main.config(background=dark if on else base)
+        # 只做一层几乎看不出的明暗过渡，再压一条发丝分隔线。
+        # 这里原来是一整块高饱和紫渐变 —— 典型的「设计抢内容」。
+        paint_gradient(self.head, w, h, SUNKEN, BG, tag="bg")
+        self.head.tag_lower("bg")
+        self.head.delete("hair")
+        self.head.create_line(0, h - 1, w, h - 1, fill=BORDER, tags="hair")
+        # 右上角两行要跟着窗口宽度走
+        self.head.coords(self._theme_win, w - 26, 32)
+        self.head.coords(self.lbl_state.item, w - 26, 62)
+        # 可能换行的文字限制宽度，否则会顶出画布
+        for lbl in (self.lbl_sources, self.lbl_alert):
+            self.head.itemconfig(lbl.item, width=w - 52)
+        self.btn_theme.config(text="☀  浅色" if THEME == "dark" else "☾  深色")
 
     def _build_ui(self):
         self._setup_style()
 
-        # ---------------- 顶部横幅 ----------------
-        head = tk.Frame(self.root, background=HEAD_BG)
-        head.pack(fill="x")
-        wrap = tk.Frame(head, background=HEAD_BG, padx=20, pady=13)
-        wrap.pack(fill="x")
+        # ---------------- 顶部标题区 ----------------
+        # 用 Canvas 只为一件事：刷一层几乎看不出的明暗过渡 + 一条发丝分隔线，
+        # Frame 做不到。文字包一层 CanvasLabel，底下那些
+        # .config(text=..., foreground=...) 一行都不用改。
+        self.head = tk.Canvas(self.root, height=138, highlightthickness=0,
+                              bd=0, background=SUNKEN)
+        self.head.pack(fill="x")
+        self._head_job = None
+        self.head.bind("<Configure>", self._head_resized)
 
-        line1 = tk.Frame(wrap, background=HEAD_BG)
-        line1.pack(fill="x")
-        tk.Label(line1, text="大肥鱼直播姬", background=HEAD_BG,
-                 foreground="white", font=(FONT, 15, "bold")).pack(side="left")
-        self.lbl_state = tk.Label(line1, text="", background=HEAD_BG,
-                                  foreground="#BFD3F5", font=(FONT, 10))
-        self.lbl_state.pack(side="right", pady=(7, 0))
+        self.head.create_text(26, 32, anchor="w", text="大肥鱼直播姬",
+                              fill=TEXT, font=(FONT, 18, "bold"))
+        # 标题下面一小段琥珀色，是整块头部唯一的彩色
+        self.head.create_line(27, 55, 62, 55, fill=ACCENT, width=3,
+                              capstyle="round")
+        self.lbl_state = CanvasLabel(self.head, self.head.create_text(
+            0, 62, anchor="e", text="", fill=MUTED, font=(FONT, 10)))
+        self.lbl_conn = CanvasLabel(self.head, self.head.create_text(
+            26, 82, anchor="w", text="● 正在检查 …", fill=TEXT,
+            font=(FONT, 10)))
+        self.lbl_sources = CanvasLabel(self.head, self.head.create_text(
+            26, 106, anchor="w", text="", fill=MUTED, font=(FONT, 9)))
+        self.lbl_alert = CanvasLabel(self.head, self.head.create_text(
+            26, 128, anchor="w", text="", fill=WARN, font=(FONT, 10, "bold")))
 
-        # NapCat 连接 —— 一切的前提
-        self.lbl_conn = tk.Label(wrap, text="● 正在检查 …", background=HEAD_BG,
-                                 foreground="#CFE0FF", font=(FONT, 10),
-                                 anchor="w", justify="left")
-        self.lbl_conn.pack(fill="x", pady=(8, 0))
-
-        # 触发源一览
-        self.lbl_sources = tk.Label(wrap, text="", background=HEAD_BG,
-                                    foreground="#9DB8E4", font=(FONT, 9),
-                                    anchor="w", justify="left", wraplength=900)
-        self.lbl_sources.pack(fill="x", pady=(5, 0))
-
-        # 告警行：平时为空，出问题才显形
-        self.lbl_alert = tk.Label(wrap, text="", background=HEAD_BG,
-                                  foreground="#FFCCC2", font=(FONT, 10, "bold"),
-                                  anchor="w", justify="left", wraplength=900)
-        self.lbl_alert.pack(fill="x")
+        # 右上角：深浅色开关。
+        # 这里用真正的 Label，而不是 Canvas 文字项 + tag_bind。文字项上的
+        # tag_bind 靠不住：rebuild_ui 之后鼠标还停在原位置时会被反复命中，
+        # 实测出现过主题**自我横跳**（一秒切一次，日志里连着一串）。真控件的
+        # 点击语义是可靠的。背景色取渐变在这个高度上的实际颜色，免得出现色块。
+        self.btn_theme = tk.Label(
+            self.head, text="", background=mix(SUNKEN, BG, 32.0 / 137.0),
+            foreground=MUTED, font=(FONT, 10), cursor="hand2",
+            padx=8, pady=2, bd=0, highlightthickness=0)
+        self._theme_win = self.head.create_window(0, 32, anchor="e",
+                                                  window=self.btn_theme)
+        self.btn_theme.bind("<Button-1>", lambda e: self.toggle_theme())
+        self.btn_theme.bind("<Enter>",
+                            lambda e: self.btn_theme.config(foreground=PRIMARY))
+        self.btn_theme.bind("<Leave>",
+                            lambda e: self.btn_theme.config(foreground=MUTED))
 
         # ---------------- 主操作区 ----------------
-        main = tk.Frame(self.root, background=BG, padx=20, pady=16)
-        main.pack(fill="x")
+        # 注意：tk.Frame 的 padx/pady 只收整数，元组是 pack/grid 才认的
+        main = tk.Frame(self.root, background=BG)
+        main.pack(fill="x", padx=26, pady=(20, 14))
 
-        self.btn_main = tk.Button(
-            main, text="开始直播通知", font=(FONT, 19, "bold"),
-            background=PRIMARY, foreground="white",
-            activebackground=PRIMARY_D, activeforeground="white",
-            relief="flat", cursor="hand2", bd=0, highlightthickness=0,
-            command=self.toggle_main)
-        self.btn_main.pack(fill="x", ipady=20)
-        self.btn_main.bind("<Enter>", lambda e: self._hover_main(True))
-        self.btn_main.bind("<Leave>", lambda e: self._hover_main(False))
+        # 高度从 92 收到 58。原来那个又高又饱和的大色块是界面里最吵的东西，
+        # 而它承载的信息只有一个动作 —— 尺寸该由内容决定，不是由"要显眼"决定。
+        self.btn_main = RoundedButton(
+            main, text="开始直播通知", command=self.toggle_main,
+            font_spec=(FONT, 15, "bold"), height=58, radius=14,
+            fill=PRIMARY, fill_active=PRIMARY_D, background=BG)
+        self.btn_main.pack(fill="x")
 
-        # 提示条：贴在大按钮正下方
+        # 提示条
         self.lbl_hotkey_hint = tk.Label(
-            main, justify="center", font=(FONT, 11, "bold"),
-            background="#FFF6DC", foreground="#8A5A00",
-            padx=12, pady=8, wraplength=840, bd=0)
-        self.lbl_hotkey_hint.pack(fill="x", pady=(11, 0))
+            main, justify="center", font=(FONT, 10, "bold"),
+            background=OK_S, foreground=OK_COLOR,
+            padx=12, pady=9, wraplength=840, bd=0)
+        self.lbl_hotkey_hint.pack(fill="x", pady=(12, 0))
 
         self.lbl_tip = tk.Label(
             main, justify="center", font=(FONT, 9), background=BG,
@@ -620,9 +884,9 @@ class App:
                                     style="Log.Vertical.TScrollbar")
         self.txt_log = tk.Text(
             outer, wrap="word", state="disabled", yscrollcommand=self.sb_log.set,
-            font=(pick_log_font(), 9), background="#1C2230", foreground="#C9D6E8",
-            insertbackground="#C9D6E8", relief="flat", padx=10, pady=8,
-            selectbackground="#2F5FA8", borderwidth=0, highlightthickness=0)
+            font=(pick_log_font(), 9), background=LOG_BG, foreground=LOG_FG,
+            insertbackground=LOG_FG, relief="flat", padx=10, pady=8,
+            selectbackground=PRIMARY, borderwidth=0, highlightthickness=0)
         self.sb_log.config(command=self.txt_log.yview)
         self.sb_log.pack(side="right", fill="y", padx=(0, 1), pady=1)
         self.txt_log.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
@@ -643,7 +907,7 @@ class App:
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, anchor="w", stretch=(key == "note"))
         self.tree.pack(fill="both", expand=True)
-        self.tree.tag_configure("odd", background="#F7FAFF")
+        self.tree.tag_configure("odd", background=SUNKEN)
 
         btns = tk.Frame(card, background=CARD)
         btns.pack(fill="x", pady=(10, 0))
@@ -698,7 +962,7 @@ class App:
             tk.Checkbutton(parent, variable=var, text=text, background=CARD,
                            foreground=TEXT, activebackground=CARD,
                            font=(FONT, 10 if bold else 9, "bold" if bold else "normal"),
-                           anchor="w", selectcolor="white",
+                           anchor="w", selectcolor=CARD,
                            highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
 
         # ① 直播间轮询 —— 最通用
@@ -763,7 +1027,7 @@ class App:
         tk.Checkbutton(off, variable=self.var_offline_at,
                        text="@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）",
                        background=CARD, foreground=TEXT, activebackground=CARD,
-                       anchor="w", selectcolor="white", highlightthickness=0,
+                       anchor="w", selectcolor=CARD, highlightthickness=0,
                        bd=0, cursor="hand2").pack(anchor="w", pady=(11, 0))
         card_hint(off, "防误报：状态转离线后先等 60 秒复核，期间恢复直播就取消；"
                        "轮播状态不会触发下播。", pady=(7, 0))
@@ -798,9 +1062,12 @@ class App:
             row=1, column=1, sticky="we", pady=(8, 0))
         row_label(2, "开播文案")
         self.txt_tpl = tk.Text(grid, height=6, wrap="word", font=(FONT, 9),
-                               background="#FBFCFE", foreground=TEXT,
-                               relief="solid", bd=1,
-                               highlightthickness=0, insertbackground=TEXT,
+                               background=SUNKEN, foreground=TEXT,
+                               relief="flat", bd=0,
+                               highlightthickness=1,
+                               highlightbackground=BORDER,
+                               highlightcolor=PRIMARY,
+                               insertbackground=TEXT,
                                padx=6, pady=4)
         self.txt_tpl.grid(row=2, column=1, sticky="we", pady=(8, 0))
         tk.Label(grid, text="可用占位符：{title} {link} {game} {time} {date}",
@@ -816,7 +1083,7 @@ class App:
         tk.Checkbutton(grid, variable=self.var_cover,
                        text="开播通知里带一张小封面图",
                        background=CARD, foreground=TEXT, activebackground=CARD,
-                       font=(FONT, 9), anchor="w", selectcolor="white",
+                       font=(FONT, 9), anchor="w", selectcolor=CARD,
                        highlightthickness=0, bd=0, cursor="hand2").grid(
             row=5, column=1, sticky="w", pady=(9, 0))
         tk.Label(grid, text="直接用你 B站直播间的封面，压到很小再发，只有几 KB",
@@ -834,7 +1101,7 @@ class App:
         tk.Checkbutton(gcard, variable=self.var_game_on,
                        text="自动识别当前在玩的游戏，写进通知里",
                        background=CARD, foreground=TEXT, activebackground=CARD,
-                       font=(FONT, 10, "bold"), anchor="w", selectcolor="white",
+                       font=(FONT, 10, "bold"), anchor="w", selectcolor=CARD,
                        highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
         card_hint(gcard, "看当前窗口和直播姬/OBS 的场景配置，认不出来就不写这行。"
                          "全程本机读取，不截图、不上传任何画面。",
@@ -851,7 +1118,7 @@ class App:
         tk.Checkbutton(gcard, variable=self.var_game_change,
                        text="中途换游戏时补一条（不 @ 任何人）",
                        background=CARD, foreground=TEXT, activebackground=CARD,
-                       font=(FONT, 9), anchor="w", selectcolor="white",
+                       font=(FONT, 9), anchor="w", selectcolor=CARD,
                        highlightthickness=0, bd=0, cursor="hand2").pack(
             anchor="w", pady=(11, 0))
 
@@ -873,7 +1140,7 @@ class App:
         tk.Checkbutton(rcard, variable=self.var_reminder_on,
                        text="开播一段时间后再提醒一次",
                        background=CARD, foreground=TEXT, activebackground=CARD,
-                       font=(FONT, 10, "bold"), anchor="w", selectcolor="white",
+                       font=(FONT, 10, "bold"), anchor="w", selectcolor=CARD,
                        highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
         card_hint(rcard, "第一波没看到的人还有一次机会。只有在直播间确实还开着"
                          "的时候才会发。", indent=24, pady=(3, 0))
@@ -948,7 +1215,7 @@ class App:
         tk.Checkbutton(boot, variable=self.var_autostart,
                        text="打开程序后自动开始监控（不用再点大按钮）",
                        background=CARD, foreground=TEXT, activebackground=CARD,
-                       font=(FONT, 10, "bold"), anchor="w", selectcolor="white",
+                       font=(FONT, 10, "bold"), anchor="w", selectcolor=CARD,
                        highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
         card_hint(boot, "勾上之后，双击图标就等于直接把监控开起来了——背后会自动拉起 "
                         "NapCat，大约 10 秒后就绪。只想改设置时建议别勾，"
@@ -979,20 +1246,85 @@ class App:
 
     def _set_state(self, state, note=""):
         self.state = state
+        # lbl_state 在头部，而头部现在是跟随主题的浅/深色，所以这里一律用
+        # 主题里的语义色（MUTED / OK_COLOR），别再写死颜色 —— 写死的话
+        # 换到深色主题就会有一行字看不见。
         if state == STATE_IDLE:
             self.btn_main.config(text="开始直播通知", background=BLUE,
                                  activebackground=BLUE_DARK, state="normal")
             self.lbl_state.config(text="未开启" + ("　" + note if note else ""),
                                   foreground=MUTED)
         elif state == STATE_WORKING:
-            self.btn_main.config(text=note or "请稍候 …", background="#9aa0a6",
-                                 activebackground="#9aa0a6", state="disabled")
+            self.btn_main.config(text=note or "请稍候 …", background=MUTED,
+                                 activebackground=MUTED, state="disabled")
             self.lbl_state.config(text=note or "请稍候 …", foreground=MUTED)
         elif state == STATE_RUNNING:
             self.btn_main.config(text="停止监控", background=RED,
                                  activebackground=RED_DARK, state="normal")
             self.lbl_state.config(text="正在监控，开播会自动通知" + ("　" + note if note else ""),
                                   foreground=OK_COLOR)
+
+    # ==================================================================
+    #  主题
+    # ==================================================================
+
+    def toggle_theme(self):
+        """在浅色 / 深色之间切换，并记住选择。"""
+        # 防重入：重建界面期间如果又收到一次点击，会递归拆建控件，
+        # 表现成主题疯狂横跳。宁可丢掉一次点击，也不能让界面自己打自己。
+        if self._theming:
+            return
+        self._theming = True
+        try:
+            new = "dark" if THEME == "light" else "light"
+            apply_theme(new)
+            self.root.configure(background=BG)
+
+            # 顺手存进配置。_ui_to_cfg 是**原地改** self.cfg 的（只覆盖它认识的
+            # 键），所以这个自定义键不会被冲掉。
+            if self.cfg is not None:
+                try:
+                    self.cfg.setdefault("ui", {})["theme"] = new
+                    self._write_config()
+                except Exception as exc:
+                    core.log("主题偏好没存下来：{}".format(exc), "WARN")
+
+            self.rebuild_ui()
+            core.log("已切到{}模式。".format("深色" if new == "dark" else "浅色"))
+        finally:
+            self._theming = False
+
+    def rebuild_ui(self):
+        """换主题：把界面整个拆了重建。
+
+        没有「重新着色」这条路 —— 颜色是创建控件时写死的。与其维护一张
+        控件清单逐个改色（漏一个就是一个诡异的色块），不如重建：界面本身
+        很轻，重建是瞬时的。
+
+        重建会丢两样东西，都得手动接回来：
+          · 输入框里的内容 —— 绝大多数来自配置，_cfg_to_ui() 能填回去
+          · 日志面板里的文字 —— 用 _restore_log() 从内存缓冲接回来
+        当前状态也要重新贴一次，否则按钮会退回默认文案。
+        """
+        for child in self.root.winfo_children():
+            child.destroy()
+        self._build_ui()
+
+        if self.cfg is not None:
+            try:
+                self._cfg_to_ui()
+            except Exception as exc:
+                core.log("重建界面后回填配置失败：{}".format(exc), "WARN")
+        self._set_state(self.state)
+        try:
+            self._refresh_group_tree()
+        except Exception:
+            pass
+        try:
+            self._refresh_hotkey_hint()
+        except Exception:
+            pass
+        self._restore_log()
 
     def _maybe_autostart(self):
         """配置里开了 auto_start 时，界面一起来就直接进监控，不用点大按钮。"""
@@ -1563,7 +1895,7 @@ class App:
 
             def done(res):
                 if isinstance(res, Exception) or not isinstance(res, dict):
-                    self.lbl_sources.config(text="触发源：状态读取失败", foreground=MUTED)
+                    self.lbl_sources.config(text="触发源：状态读取失败", foreground=HEAD_DIM)
                     self.lbl_obs.config(text="OBS 状态：—", foreground=MUTED)
                     self.lbl_platform.config(text="直播间状态：—", foreground=MUTED)
                     return
@@ -1596,10 +1928,10 @@ class App:
                     bits.append("进程检测")
                 if bits:
                     self.lbl_sources.config(text="触发源　" + "　·　".join(bits),
-                                            foreground=MUTED)
+                                            foreground=HEAD_DIM)
                 else:
                     self.lbl_sources.config(text="触发源：一个都没启用，不会自动通知",
-                                            foreground=BAD_COLOR)
+                                            foreground=HEAD_BAD)
 
                 # ---- 触发方式页里的详细状态 ----
                 off = "已开启" if res.get("offline_message") else "已关闭"
@@ -1612,7 +1944,7 @@ class App:
 
             self.run_async(work, done)
         else:
-            self.lbl_sources.config(text="触发源　监控未开启", foreground=MUTED)
+            self.lbl_sources.config(text="触发源　监控未开启", foreground=HEAD_DIM)
             self.lbl_obs.config(text="OBS 状态：—", foreground=MUTED)
             self.lbl_platform.config(text="直播间状态：—", foreground=MUTED)
 
@@ -1642,15 +1974,15 @@ class App:
                 " + ".join(what))
             if hk and hk_on:
                 text += "\n快捷键 {} 是备用：想随时手动推一次就按它".format(hk.upper())
-            self.lbl_hotkey_hint.config(background="#e8f5e9", foreground="#1b5e20",
+            self.lbl_hotkey_hint.config(background=OK_S, foreground=OK_COLOR,
                                         text=text)
         elif hk and hk_on:
             self.lbl_hotkey_hint.config(
-                background="#fff8e1", foreground="#a35b00",
+                background=WARN_S, foreground=WARN,
                 text="⚠ 没开自动检测 —— 开播时记得按一下  {}  ".format(hk.upper()))
         else:
             self.lbl_hotkey_hint.config(
-                background="#fdecea", foreground=BAD_COLOR,
+                background=BAD_S, foreground=BAD_COLOR,
                 text="⚠ 自动检测和快捷键都没开 —— 开播时不会通知任何人")
 
     def capture_hotkey(self):
@@ -1744,7 +2076,7 @@ class App:
 
     def refresh_status(self):
         if self.cfg is None:
-            self.lbl_conn.config(text="● 配置未载入", foreground=BAD_COLOR)
+            self.lbl_conn.config(text="● 配置未载入", foreground=HEAD_BAD)
             return
 
         def work():
@@ -1757,10 +2089,10 @@ class App:
                 self.lbl_conn.config(
                     text="● QQ 已就绪　{}（{}）".format(data.get("nickname"),
                                                         data.get("user_id")),
-                    foreground=OK_COLOR)
+                    foreground=HEAD_OK)
             else:
                 self.lbl_conn.config(text="● QQ 未就绪（点下面的按钮会自动启动）",
-                                     foreground=MUTED)
+                                     foreground=HEAD_DIM)
 
         self.run_async(work, done)
 
@@ -1788,7 +2120,7 @@ class App:
             self.lbl_game_test.config(
                 text="✔ {}　（{} {}）".format(
                     name, win.get("class") or "?", win.get("size") or ""),
-                foreground=OK_COLOR)
+                foreground=HEAD_OK)
 
         self.run_async(work, done)
 
@@ -1839,6 +2171,11 @@ class App:
         self.root.after(120, self._drain_log)
 
     def _append_log(self, line):
+        # 同时留一份在内存里：换主题要重建界面，日志面板是新建的空控件，
+        # 得靠这个缓冲把内容接回来，否则一切主题日志就清空了。
+        self.log_tail.append(line)
+        if len(self.log_tail) > MAX_LOG_LINES:
+            del self.log_tail[:len(self.log_tail) - MAX_LOG_LINES]
         self.txt_log.config(state="normal")
         self.txt_log.insert("end", line + "\n")
         total = int(self.txt_log.index("end-1c").split(".")[0])
@@ -1847,7 +2184,17 @@ class App:
         self.txt_log.see("end")
         self.txt_log.config(state="disabled")
 
+    def _restore_log(self):
+        """把内存里那份日志写回新建的面板（换主题用）。"""
+        if not self.log_tail:
+            return
+        self.txt_log.config(state="normal")
+        self.txt_log.insert("end", "\n".join(self.log_tail) + "\n")
+        self.txt_log.see("end")
+        self.txt_log.config(state="disabled")
+
     def clear_log(self):
+        self.log_tail = []
         self.txt_log.config(state="normal")
         self.txt_log.delete("1.0", "end")
         self.txt_log.config(state="disabled")
