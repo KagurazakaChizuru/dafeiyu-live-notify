@@ -429,9 +429,9 @@ def main():
     results = {}
 
     for idx, (title, argv) in enumerate([
-        ("1/4  自检 check", ["check", "--config", path]),
-        ("2/4  彩排 test（不应真的发出去）", ["test", "--config", path]),
-        ("3/4  真实发送 send", ["send", "--config", path]),
+        ("1/9  自检 check", ["check", "--config", path]),
+        ("2/9  彩排 test（不应真的发出去）", ["test", "--config", path]),
+        ("3/9  真实发送 send", ["send", "--config", path]),
     ], 1):
         print("\n" + "#" * 70)
         print("# " + title)
@@ -441,22 +441,22 @@ def main():
     httpd.shutdown()
 
     print("\n" + "#" * 70)
-    print("# 4/5  触发引擎状态机")
+    print("# 4/9  触发引擎状态机")
     print("#" * 70)
     failures = run_engine_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 5/8  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("# 5/9  游戏识别（纯逻辑，不要求有游戏在跑）")
     print("#" * 70)
     failures += run_games_tests()
 
     print("\n" + "#" * 70)
-    print("# 6/8  群发失败重试")
+    print("# 6/9  群发失败重试")
     print("#" * 70)
     failures += run_send_retry_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 7/8  日志落盘前的密钥打码")
+    print("# 7/9  日志落盘前的密钥打码")
     print("#" * 70)
     failures += run_redact_tests()
 
@@ -465,7 +465,7 @@ def main():
     print("#" * 70)
     failures += run_corner_tests()
 
-    print("\\n" + "#" * 70)
+    print("\n" + "#" * 70)
     print("# 9/9  启动豁免期（防止鼠标误触）")
     print("#" * 70)
     failures += run_click_guard_tests()
