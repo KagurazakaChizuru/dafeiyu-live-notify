@@ -247,6 +247,7 @@ class App:
         self.root.after(1200, self._poll_processes)
         self.root.after(6000, self._poll_health)
         self.root.after(3000, self._poll_trigger)
+        self.root.after(900, self._maybe_autostart)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # ==================================================================
@@ -539,6 +540,18 @@ class App:
         ttk.Button(proc, text="列出当前直播相关进程",
                    command=self.list_live_processes).pack(anchor="w", pady=(8, 0))
 
+        # ---------------- 启动行为 ----------------
+        boot = ttk.LabelFrame(outer, text=" 启动行为 ", padding=12)
+        boot.pack(fill="x", pady=(12, 0))
+        self.var_autostart = tk.BooleanVar()
+        ttk.Checkbutton(boot, variable=self.var_autostart,
+                        text="打开程序后自动开始监控（不用再点大按钮）"
+                        ).pack(anchor="w")
+        ttk.Label(boot, foreground=MUTED, wraplength=760, justify="left",
+                  text="勾上之后，双击图标就等于直接把监控开起来了——背后会自动拉起 NapCat，"
+                       "大约 10 秒后就绪。只想改设置时建议别勾，否则每次都白起一遍 NapCat。"
+                  ).pack(anchor="w", padx=(22, 0), pady=(4, 0))
+
         save = ttk.Frame(outer)
         save.pack(fill="x", pady=(14, 0))
         ttk.Button(save, text="保存", width=12,
@@ -574,6 +587,12 @@ class App:
                                  activebackground=RED_DARK, state="normal")
             self.lbl_state.config(text="正在监控，开播会自动通知" + ("　" + note if note else ""),
                                   foreground=OK_COLOR)
+
+    def _maybe_autostart(self):
+        """配置里开了 auto_start 时，界面一起来就直接进监控，不用点大按钮。"""
+        if ((self.cfg or {}).get("behavior") or {}).get("auto_start"):
+            core.log("配置里开了「打开就自动开始」，正在自动进入监控 …")
+            self.start_all()
 
     def start_all(self):
         if self.cfg is None:
@@ -699,6 +718,7 @@ class App:
         self.var_confirm.set(str(int(w["confirm_checks"])))
         self.var_cooldown.set(str(int(b["cooldown_minutes"])))
         self.var_sendgap.set(str(int(b["send_interval_seconds"])))
+        self.var_autostart.set(bool(b.get("auto_start", False)))
         self.var_procs.set("，".join(w["processes"]))
 
         t = self.cfg.get("trigger") or {}
@@ -738,6 +758,7 @@ class App:
             self.cfg["watch"]["confirm_checks"] = num(self.var_confirm, "防抖次数", 1, 100)
             self.cfg["behavior"]["cooldown_minutes"] = num(self.var_cooldown, "冷却时间", 0, 1440)
             self.cfg["behavior"]["send_interval_seconds"] = num(self.var_sendgap, "多群发送间隔", 0, 600)
+            self.cfg["behavior"]["auto_start"] = bool(self.var_autostart.get())
             raw = self.var_procs.get().replace("，", ",").replace("、", ",")
             procs = [p.strip().lower() for p in raw.split(",") if p.strip()]
             if self.var_proc.get() and not procs:

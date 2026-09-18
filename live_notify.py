@@ -296,6 +296,9 @@ def load_config(path):
         "cooldown_minutes": float(behavior.get("cooldown_minutes", 30) or 0),
         "send_interval_seconds": float(behavior.get("send_interval_seconds", 3) or 0),
         "dry_run": bool(behavior.get("dry_run", False)),
+        # 打开程序就自动开始监控，不必再点大按钮。
+        # 默认关闭：多数人打开界面只是想改设置，不该顺手把 NapCat 也拉起来。
+        "auto_start": bool(behavior.get("auto_start", False)),
     }
     try:
         control_port = int(control.get("port", 8899) or 8899)
