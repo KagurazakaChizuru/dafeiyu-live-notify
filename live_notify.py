@@ -50,7 +50,7 @@ except ImportError:                # 缺文件时通知里就不带游戏名
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.5.2"
+VERSION = "1.6.0"
 
 def _resolve_base_dir():
     """确定**数据目录**（config.json / logs / napcat 所在处）。
@@ -70,6 +70,83 @@ def _resolve_base_dir():
 BASE_DIR = _resolve_base_dir()
 DEFAULT_CONFIG = os.path.join(BASE_DIR, "config.json")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
+
+# --------------------------------------------------------------------------
+#  内置文案池
+# --------------------------------------------------------------------------
+#  开箱即用、**自动轮换**：每次开播从池子里随机挑一条，群友不会每次都看到
+#  同一句。用户什么都不用设；想自己改就直接改配置里的 template / templates。
+#
+#  写这些文案时守三条：
+#    · 每条都短 —— 群友扫一眼就完了，没人读长文
+#    · 风格刻意拉开（直白 / 卖萌 / 中二 / 自嘲 / 简洁），不然挑来挑去一个味
+#    · 留 {link}，那是通知里唯一有用的信息
+TEMPLATE_POOLS = {
+    "live": [
+        "🔴 开播了\n{link}",
+        "🔴 开播了！\n\n{title}\n正在玩《{game}》\n{link}",
+        "🔴 开播了，就差你了\n\n{title}\n正在玩《{game}》\n{link}",
+        "🥺 播了半小时，房间还是空的\n\n{title}\n{link}\n来个人陪陪我",
+        "⚔️ 战场的门已经开了\n\n{title}\n正在玩《{game}》\n{link}",
+        "🔴 又到了丢人现眼的时间\n\n{title}\n正在玩《{game}》\n{link}",
+        "💗 想你们了，所以我开播了\n\n{title}\n正在玩《{game}》\n{link}",
+        "📢 已开播\n\n{title}\n正在玩《{game}》\n{link}",
+        "🌙 深夜档开了\n\n{title}\n正在玩《{game}》\n{link}\n睡不着就来聊两句",
+        "🎉 周末到了，开播！\n\n{title}\n正在玩《{game}》\n{link}",
+        "▶ 直播已开始\n{title}\n《{game}》\n{link}",
+        "🐟 上班摸鱼的可以来看了\n\n{title}\n正在玩《{game}》\n{link}",
+    ],
+    "offline": [
+        "🌙 下播了，谢谢陪播\n今晚播了 {duration}",
+        "🌙 下播啦\n\n今晚播了 {duration}\n人气最高 {peak}\n谢谢大家",
+        "🌙 今天就到这\n\n播了 {duration}，峰值 {peak}\n明天见",
+        "🥺 播了 {duration}，人还是不多\n谢谢留下来的各位",
+        "🌙 战场暂时关闭\n\n本次 {duration}\n最后在玩《{game}》",
+        "💗 谢谢今晚陪我的每一个人\n\n播了 {duration}，峰值 {peak}\n晚安",
+    ],
+    "reminder": [
+        "还在播～\n{link}",
+        "还在播，正在玩《{game}》\n{link}",
+        "都播了一阵了，还不来看看？\n\n{title}\n正在玩《{game}》\n{link}",
+        "还没下播，人少得可怜\n\n{title}\n{link}",
+        "直播仍在继续\n\n{title}\n正在玩《{game}》\n{link}",
+        "这个点还开着的应该不多了\n\n正在玩《{game}》\n{link}",
+    ],
+    "change": [
+        "换游戏了，现在打《{game}》",
+        "不玩上一个了，改打《{game}》",
+        "换战场了 —— 《{game}》",
+        "换游戏了，现在打《{game}》\n{link}",
+        "换个口味，《{game}》走起",
+    ],
+}
+
+
+def _own_first(own, pool):
+    """用户自己写的那句排在最前面，后面跟内置池子。
+
+    不这么做的话，一旦用上内置池子，用户原来那句就永远发不出去了 ——
+    那是他自己敲的，不该被我的默认值挤掉。
+    """
+    out = list(pool)
+    own = str(own or "").strip()
+    if own and own not in out:
+        out.insert(0, own)
+    return out
+
+
+def pick_from(pool, fallback=""):
+    """从文案池里随机挑一条。池子空了才退回 fallback。
+
+    每次调用都重新挑 —— 所以同一场直播里的开播、二次提醒、下播会各挑各的，
+    不会整场都用同一句。
+    """
+    pool = [p for p in (pool or []) if p and p.strip()]
+    if pool:
+        return random.choice(pool)
+    return fallback
+
+
 
 # 默认监控的直播软件进程名（小写比较；支持子串匹配）
 #
@@ -315,10 +392,14 @@ def load_config(path):
     except (TypeError, ValueError, IndexError):
         raise ConfigError("message.cover_size 必须是两个数字，例如 [200, 112]")
     msg_cfg = {
-        "template": str(message.get("template") or "我开播啦！大家快来～"),
-        # 多套文案轮换：填了就用它随机挑，避免每次发一模一样、
-        # 群里几轮之后就自动忽略了。
-        "templates": templates,
+        "template": str(message.get("template") or TEMPLATE_POOLS["live"][0]),
+        # 多套文案轮换。用户没填就用**内置池子** —— 默认就该是轮换的：
+        # 每场直播发一模一样的话，群里刷到第三遍就自动忽略了。
+        #
+        # 用户自己写的那句要**插在池子最前面**，不能被内置池子盖掉：
+        # 那是他一个字一个字敲的，是这套文案里最有个性的一条。
+        "templates": templates or _own_first(message.get("template"),
+                                             TEMPLATE_POOLS["live"]),
         "title": str(message.get("title") or ""),
         "link": str(message.get("link") or ""),
         # 开播通知里带一张小封面。B站图床直接给缩好的图，很便宜。
@@ -346,7 +427,10 @@ def load_config(path):
         # 中途换游戏时补发一条
         "announce_change": bool(game.get("announce_change", True)),
         "change_template": str(game.get("change_template")
-                               or "换游戏了，现在打《{game}》"),
+                               or TEMPLATE_POOLS["change"][0]),
+        "change_templates": [str(x) for x in (game.get("change_templates") or [])]
+                            or _own_first(game.get("change_template"),
+                                          TEMPLATE_POOLS["change"]),
         "change_cooldown_minutes": float(game.get("change_cooldown_minutes", 5) or 0),
     }
 
@@ -375,7 +459,10 @@ def load_config(path):
         # 所以这个上限是硬性的。
         "max_total": max(1, int(reminder.get("max_total", 3) or 3)),
         "template": str(reminder.get("template")
-                        or "还在播～ 现在打《{game}》\n{link}"),
+                        or TEMPLATE_POOLS["reminder"][0]),
+        "templates": [str(x) for x in (reminder.get("templates") or [])]
+                     or _own_first(reminder.get("template"),
+                                   TEMPLATE_POOLS["reminder"]),
         "at_all": bool(reminder.get("at_all", False)),
     }
 
@@ -390,7 +477,10 @@ def load_config(path):
     offline_cfg = {
         "enabled": bool(offline.get("enabled", True)),
         "template": str(offline.get("template")
-                        or "🌙 下播啦，今晚播了 {duration}\n\n谢谢大家陪播～"),
+                        or TEMPLATE_POOLS["offline"][0]),
+        "templates": [str(x) for x in (offline.get("templates") or [])]
+                     or _own_first(offline.get("template"),
+                                   TEMPLATE_POOLS["offline"]),
         # 下播默认不 @ 任何人：没在看直播的人不会关心你几点停
         "at_all": bool(offline.get("at_all", False)),
         # 状态转离线后先等这么久再确认，用来过滤断流重连造成的假下播
@@ -1175,7 +1265,8 @@ def cmd_watch(cfg, stop_event=None):
             log("已开播 {} 分钟，发送二次提醒。".format(int(minutes)))
             send_to_groups(cfg, onebot,
                            "开播 {} 分钟后的二次提醒".format(int(minutes)),
-                           template=reminder_cfg.get("template"),
+                           template=pick_from(reminder_cfg.get("templates"),
+                                   reminder_cfg.get("template")),
                            extra_fields={"game": name},
                            at_all=bool(reminder_cfg.get("at_all", False)))
             return
@@ -1200,7 +1291,8 @@ def cmd_watch(cfg, stop_event=None):
         state["last_game_change"] = now
         send_to_groups(cfg, onebot,
                        "换游戏：{}".format(name),
-                       template=game_cfg.get("change_template"),
+                       template=pick_from(game_cfg.get("change_templates"),
+                                          game_cfg.get("change_template")),
                        extra_fields={"game": name},
                        at_all=False)
 
@@ -1236,7 +1328,8 @@ def cmd_watch(cfg, stop_event=None):
             cfg, onebot,
             "直播间已下播（时长 {}，人气峰值 {}）".format(
                 duration or "未知", peak or "未知"),
-            template=offline_cfg.get("template"),
+            template=pick_from(offline_cfg.get("templates"),
+                              offline_cfg.get("template")),
             extra_fields=extra,
             at_all=bool(offline_cfg.get("at_all", False)))
 

@@ -266,6 +266,57 @@ STATE_RUNNING = "running"
 
 
 # --------------------------------------------------------------------------
+#  文案库
+# --------------------------------------------------------------------------
+#  用途：消息与设置页里点一下就把某套文案追加进「开播文案」框，攒够几套之后
+#  程序会**每次开播随机挑一套**（用单独一行 --- 分隔，见 split_templates）。
+#
+#  写这些文案时守三条：
+#    · 每条都短，群友扫一眼就完了，没人读长文
+#    · 风格刻意拉开（直白 / 卖萌 / 中二 / 自嘲 / 简洁），不然挑来挑去都一个味
+#    · 必须留 {link}，那是通知里唯一有用的信息
+TEMPLATE_LIBRARY = {
+    "live": [
+        ("直白", "🔴 开播了\n{link}"),
+        ("带标题和游戏", "🔴 开播了！\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("催人来", "🔴 开播了，就差你了\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("卖惨", "🥺 播了半小时，房间还是空的\n\n{title}\n{link}\n来个人陪陪我"),
+        ("中二", "⚔️ 战场的门已经开了\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("自嘲", "🔴 又到了丢人现眼的时间\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("宠粉", "💗 想你们了，所以我开播了\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("正经通知", "📢 已开播\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("深夜", "🌙 深夜档开了\n\n{title}\n正在玩《{game}》\n{link}\n睡不着就来聊两句"),
+        ("周末", "🎉 周末到了，开播！\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("硬核", "▶ 直播已开始\n{title}\n《{game}》\n{link}"),
+        ("摸鱼", "🐟 上班摸鱼的可以来看了\n\n{title}\n正在玩《{game}》\n{link}"),
+    ],
+    "offline": [
+        ("简短", "🌙 下播了，谢谢陪播\n今晚播了 {duration}"),
+        ("带峰值", "🌙 下播啦\n\n今晚播了 {duration}\n人气最高 {peak}\n谢谢大家"),
+        ("预告下次", "🌙 今天就到这\n\n播了 {duration}，峰值 {peak}\n明天见"),
+        ("卖惨", "🥺 播了 {duration}，人还是不多\n谢谢留下来的各位"),
+        ("中二", "🌙 战场暂时关闭\n\n本次 {duration}\n最后在玩《{game}》"),
+        ("感恩", "💗 谢谢今晚陪我的每一个人\n\n播了 {duration}，峰值 {peak}\n晚安"),
+    ],
+    "reminder": [
+        ("简短", "还在播～\n{link}"),
+        ("带游戏", "还在播，正在玩《{game}》\n{link}"),
+        ("催人", "都播了一阵了，还不来看看？\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("自嘲", "还没下播，人少得可怜\n\n{title}\n{link}"),
+        ("正经", "直播仍在继续\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("深夜", "这个点还开着的应该不多了\n\n正在玩《{game}》\n{link}"),
+    ],
+    "change": [
+        ("简短", "换游戏了，现在打《{game}》"),
+        ("直白", "不玩上一个了，改打《{game}》"),
+        ("中二", "换战场了 —— 《{game}》"),
+        ("带链接", "换游戏了，现在打《{game}》\n{link}"),
+        ("随性", "换个口味，《{game}》走起"),
+    ],
+}
+
+
+# --------------------------------------------------------------------------
 #  界面小工具
 # --------------------------------------------------------------------------
 
@@ -1198,9 +1249,9 @@ class App:
             self.root.geometry(geo)
         else:
             sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-            self.root.geometry("{}x{}".format(min(980, sw - 80),
-                                              min(760, sh - 120)))
-        self.root.minsize(880, 620)
+            self.root.geometry("{}x{}".format(min(860, sw - 80),
+                                              min(720, sh - 120)))
+        self.root.minsize(780, 580)
         self.root.configure(background=BG)
         set_window_icon(self.root)
 
@@ -1454,8 +1505,7 @@ class App:
         self.lbl_tip = tk.Label(
             left, justify="left", anchor="w", font=(FONT, 9), background=SURFACE,
             foreground=MUTED, wraplength=600,
-            text="点一下就开始，之后一直挂着就行。"
-                 "程序跑在独立的 QQ 副本上，你自己聊天的 QQ 不受影响。")
+            text="点一下就开始，之后一直挂着。不影响你自己聊天的 QQ。")
         self.lbl_tip.pack(anchor="w", pady=(3, 0))
 
         self.btn_main = RoundedButton(
@@ -1539,7 +1589,7 @@ class App:
 
         bar = tk.Frame(page, background=BG)
         bar.pack(fill="x", pady=(0, 8))
-        tk.Label(bar, text="程序运行记录　出问题先看这里", background=BG,
+        tk.Label(bar, text="程序运行记录", background=BG,
                  foreground=MUTED, font=(FONT, 9)).pack(side="left")
         ttk.Button(bar, text="清空", width=8,
                    command=self.clear_log).pack(side="right")
@@ -1593,6 +1643,23 @@ class App:
             wraplength=740)
         self.lbl_last_send.pack(fill="x", pady=(6, 0))
 
+    def _refresh_pool_hint(self):
+        """告诉用户「现在有几套、是不是在轮换」。"""
+        if not hasattr(self, "lbl_pool"):
+            return
+        blocks = split_templates(self.txt_tpl.get("1.0", "end-1c"))
+        if len(blocks) > 1:
+            self.lbl_pool.config(
+                text="共 {} 套，每次开播随机挑一套".format(len(blocks)),
+                foreground=OK_COLOR)
+        elif len(blocks) == 1:
+            self.lbl_pool.config(
+                text="只有 1 套，每次开播都是这一句。想换着发就在下面加 "
+                     "--- 再写一套",
+                foreground=MUTED)
+        else:
+            self.lbl_pool.config(text="", foreground=MUTED)
+
     def _refresh_last_send(self):
         """把 core.LAST_SEND 摊到界面上。
 
@@ -1607,7 +1674,7 @@ class App:
         if not when or not total:
             self.lbl_last_when.config(text="")
             self.lbl_last_send.config(
-                text="这次开着界面之后还没发过通知。", foreground=MUTED)
+                text="还没发过通知。", foreground=MUTED)
             return
 
         ok = int(info.get("ok") or 0)
@@ -1616,11 +1683,11 @@ class App:
         self.lbl_last_when.config(text="{}　{}".format(when, what))
         if failed:
             self.lbl_last_send.config(
-                text="⚠ 成功 {}/{}，有 {} 个群最终没发出去".format(
+                text="⚠ 成功 {}/{}，{} 个群没发出去".format(
                     ok, total, len(failed)),
                 foreground=BAD_COLOR)
         elif ok == total:
-            self.lbl_last_send.config(text="已发送 {}/{}　全部成功".format(ok, total),
+            self.lbl_last_send.config(text="成功 {}/{}".format(ok, total),
                                       foreground=OK_COLOR)
         else:
             self.lbl_last_send.config(text="已发送 {}/{}".format(ok, total),
@@ -1674,15 +1741,11 @@ class App:
                                         foreground=MUTED, font=(FONT, 9))
         self.lbl_group_count.pack(side="right")
 
-        card_hint(card,
-                  "@全体成员 只有群主或管理员发出去才生效。"
-                  "如果机器人只是普通成员，请改成「@指定人」再点「自定义 @名单」填 QQ 号。",
-                  pady=(10, 0))
+        card_hint(card, "@全体成员 只有群主/管理员发了才生效。", pady=(10, 0))
 
         add_outer, add = make_card(page, "加群", padx=12, pady=12)
         add_outer.pack(fill="x", pady=(12, 0))
-        card_hint(add, "机器人必须先被拉进那个群，这里才刷得出来。",
-                  pady=(0, 8))
+        card_hint(add, "先把机器人拉进群，这里才刷得出来。", pady=(0, 8))
         row = tk.Frame(add, background=CARD)
         row.pack(fill="x")
         self.cmb_groups = ttk.Combobox(row, state="readonly", font=(FONT, 9))
@@ -1719,16 +1782,15 @@ class App:
         outer.pack(fill="x")
 
         check(card, self.var_platform, "① 直播间开播时通知　推荐")
-        card_hint(card, "不管用 OBS、直播姬、直播伴侣还是手机开播，"
-                        "只要房间真的开了就能检测到。", indent=24, pady=(2, 0))
+        card_hint(card, "用什么软件播都认，手机播也认。",
+                  indent=24, pady=(2, 0))
         self.lbl_platform = tk.Label(card, text="直播间状态：—", background=CARD,
                                      foreground=MUTED, font=(FONT, 9, "bold"),
                                      anchor="w", justify="left")
         self.lbl_platform.pack(anchor="w", padx=(24, 0), pady=(3, 14))
 
         check(card, self.var_obs, "② OBS 开始推流时通知")
-        card_hint(card, "精确到按下「开始推流」那一刻。需要 OBS 至少启动过一次"
-                        "（WebSocket 默认就是开的，密码程序自动读取）。",
+        card_hint(card, "精确到按下「开始推流」那一刻。需要 OBS 启动过一次。",
                   indent=24, pady=(2, 0))
         self.lbl_obs = tk.Label(card, text="OBS 状态：—", background=CARD,
                                 foreground=MUTED, font=(FONT, 9, "bold"),
@@ -1736,8 +1798,7 @@ class App:
         self.lbl_obs.pack(anchor="w", padx=(24, 0), pady=(3, 14))
 
         check(card, self.var_hotkey_on, "③ 全局快捷键（兜底）")
-        card_hint(card, "任何情况下按一下就推送，不依赖任何软件接口。",
-                  indent=24, pady=(2, 6))
+        card_hint(card, "任何情况下按一下就推。", indent=24, pady=(2, 6))
         hkrow = tk.Frame(card, background=CARD)
         hkrow.pack(anchor="w", padx=(24, 0), pady=(0, 14))
         ttk.Entry(hkrow, textvariable=self.var_hotkey, width=16,
@@ -1746,8 +1807,7 @@ class App:
                    command=self.capture_hotkey).pack(side="left", padx=8)
 
         check(card, self.var_proc, "④ 直播软件一启动就通知　不推荐")
-        card_hint(card, "打开软件 ≠ 开播。你开软件后还要调设备、试麦，"
-                        "这段时间会白提醒群友一次，所以默认关闭。",
+        card_hint(card, "打开软件 ≠ 开播，会白提醒一次。默认关。",
                   indent=24, pady=(2, 0))
         self.lbl_process = tk.Label(card, text="", background=CARD,
                                     foreground=MUTED, font=(FONT, 9), anchor="w")
@@ -1763,9 +1823,8 @@ class App:
 
         check(off, self.var_offline,
               "下播时也发一条（依赖上面的「直播间开播时通知」）")
-        card_hint(off, "占位符 {duration} 会自动填成这次播了多久（如「2 小时 15 分钟」），"
-                       "{peak} 是本场人气峰值，{game} 是最后在玩的游戏。"
-                       "其中 {game} 和 {peak} 拿不到时，"
+        card_hint(off, "占位符 {duration} 是本次时长，{peak} 人气峰值，{game} 最后的游戏。"
+                       "拿不到的就不写这一行。"
                        "含它的那一整行会自动消失。",
                   indent=24, pady=(3, 8))
         tplrow = tk.Frame(off, background=CARD)
@@ -1776,8 +1835,7 @@ class App:
         toggle_row(off, self.var_offline_at,
                    "@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）",
                    pady=(11, 0))
-        card_hint(off, "防误报：状态转离线后先等 60 秒复核，期间恢复直播就取消；"
-                       "轮播状态不会触发下播。", pady=(7, 0))
+        card_hint(off, "转离线后先等 60 秒复核，期间恢复直播就取消。", pady=(7, 0))
 
     def _build_message_tab(self):
         self.sf_message = ScrollFrame(self.tab_message)
@@ -1828,20 +1886,26 @@ class App:
                                insertbackground=TEXT,
                                padx=8, pady=6)
         self.txt_tpl.grid(row=2, column=1, sticky="w")
-        tk.Label(grid, text="可用占位符：{title} {link} {game} {time} {date}",
-                 background=CARD, foreground=MUTED, font=(FONT, 8),
-                 anchor="w").grid(row=3, column=1, sticky="w", pady=(8, 0))
-        tk.Label(grid, text="想写多套就分几段，中间用单独一行 --- 隔开 —— "
-                            "每次开播随机挑一套，免得每次都一模一样",
-                 background=CARD, foreground=MUTED, font=(FONT, 8),
-                 anchor="w").grid(row=4, column=1, sticky="w", pady=(2, 0))
+        # 不再放"文案库 + 加进去"那种要用户动手的东西 —— 程序**自带一池文案
+        # 自动轮换**，用户想改就直接改上面的框。
+        self.lbl_pool = tk.Label(
+            grid, text="", background=BG, foreground=MUTED, font=(FONT, 8),
+            anchor="w", justify="left", wraplength=560)
+        self.lbl_pool.grid(row=4, column=1, sticky="w", pady=(8, 0))
+        self.txt_tpl.bind("<KeyRelease>", lambda e: self._refresh_pool_hint())
+
+        tk.Label(grid,
+                 text="占位符：{title} {link} {game} {time} {date}",
+                 background=BG, foreground=MUTED, font=(FONT, 8),
+                 anchor="w", justify="left", wraplength=560).grid(
+            row=5, column=1, sticky="w", pady=(4, 0))
 
         self.var_cover = tk.BooleanVar()
         self.var_cover_size = tk.StringVar()
-        toggle_row(grid, self.var_cover, "开播通知里带一张小封面图", pady=(9, 0), grid=(5, 1))
-        tk.Label(grid, text="直接用你 B站直播间的封面，压到很小再发，只有几 KB",
+        toggle_row(grid, self.var_cover, "开播通知里带一张小封面图", pady=(16, 0), grid=(7, 1))
+        tk.Label(grid, text="用直播间封面，压到几 KB",
                  background=CARD, foreground=MUTED, font=(FONT, 8),
-                 anchor="w").grid(row=6, column=1, sticky="w", padx=(24, 0))
+                 anchor="w").grid(row=8, column=1, sticky="w", padx=(24, 0))
 
         # ---------------- 游戏识别 ----------------
         g_outer, gcard = make_card(page, "游戏识别　在通知里写清楚「正在玩什么」")
@@ -1852,8 +1916,7 @@ class App:
         self.var_game_ignore = tk.StringVar()
 
         toggle_row(gcard, self.var_game_on, "自动识别当前在玩的游戏，写进通知里")
-        card_hint(gcard, "看当前窗口和直播姬/OBS 的场景配置，认不出来就不写这行。"
-                         "全程本机读取，不截图、不上传任何画面。",
+        card_hint(gcard, "看窗口和场景配置，认不出就不写。不截图、不上传。",
                   indent=24, pady=(3, 0))
 
         grow = tk.Frame(gcard, background=CARD)
@@ -1866,7 +1929,7 @@ class App:
 
         toggle_row(gcard, self.var_game_change, "中途换游戏时补一条（不 @ 任何人）", pady=(11, 0))
 
-        tk.Label(gcard, text="不算游戏的　填 exe 名，逗号分隔（比如虚拟形象软件）",
+        tk.Label(gcard, text="不算游戏的　exe 名，逗号分隔",
                  background=CARD, foreground=TEXT, font=(FONT, 9),
                  anchor="w").pack(anchor="w", pady=(11, 4))
         ttk.Entry(gcard, textvariable=self.var_game_ignore,
@@ -1882,8 +1945,8 @@ class App:
         self.var_reminder_tpl = tk.StringVar()
 
         toggle_row(rcard, self.var_reminder_on, "开播一段时间后再提醒一次")
-        card_hint(rcard, "第一波没看到的人还有一次机会。只有在直播间确实还开着"
-                         "的时候才会发。", indent=24, pady=(3, 0))
+        card_hint(rcard, "只在直播间确实还开着时才发。",
+                  indent=24, pady=(3, 0))
 
         rrow = tk.Frame(rcard, background=CARD)
         rrow.pack(anchor="w", padx=(24, 0), pady=(8, 0))
@@ -1902,8 +1965,8 @@ class App:
                  font=(FONT, 9), anchor="w").pack(anchor="w", pady=(10, 4))
         ttk.Entry(rcard, textvariable=self.var_reminder_tpl,
                   font=(FONT, 9)).pack(fill="x")
-        card_hint(rcard, "可用占位符：{game} {link} {title} {time}　"
-                         "默认不 @ 任何人", pady=(4, 0))
+        card_hint(rcard, "占位符 {game} {link} {title} {time}　默认不 @ 人",
+                  pady=(4, 0))
 
         # ---------------- 触发与发送 ----------------
         b_outer, beh = make_card(page, "触发与发送")
@@ -2023,7 +2086,7 @@ class App:
         elif state == STATE_RUNNING:
             self.btn_main.config(text="停止监控", background=RED,
                                  activebackground=RED_DARK, state="normal")
-            self.lbl_state.config(text="正在监控，开播会自动通知" + ("　" + note if note else ""),
+            self.lbl_state.config(text="正在监控" + ("　" + note if note else ""),
                                   foreground=OK_COLOR)
 
         # 状态点：只有监控中才呼吸。加 _pulsing 是为了防止重复调用 _set_state
@@ -2743,19 +2806,18 @@ class App:
                 what.append("直播间开播")
             if obs_on:
                 what.append("OBS 推流")
-            text = "已开启自动检测（{}）—— 开播时会自动通知，你不用做任何事".format(
-                " + ".join(what))
+            text = "已开启自动检测（{}）".format(" + ".join(what))
             if hk and hk_on:
-                text += "\n快捷键 {} 是备用：想随时手动推一次就按它".format(hk.upper())
+                text += "\n快捷键 {} 可手动推一次".format(hk.upper())
             self.lbl_hotkey_hint.config(foreground=OK_COLOR, text=text)
         elif hk and hk_on:
             self.lbl_hotkey_hint.config(
                 foreground=WARN,
-                text="⚠ 没开自动检测 —— 开播时记得按一下  {}  ".format(hk.upper()))
+                text="⚠ 没开自动检测，开播要手动按 {}".format(hk.upper()))
         else:
             self.lbl_hotkey_hint.config(
                 foreground=BAD_COLOR,
-                text="⚠ 自动检测和快捷键都没开 —— 开播时不会通知任何人")
+                text="⚠ 自动检测和快捷键都没开，开播不会通知任何人")
 
     def capture_hotkey(self):
         """弹窗：让用户直接按下组合键来设置快捷键（比手打直观，也不会写错格式）。"""
