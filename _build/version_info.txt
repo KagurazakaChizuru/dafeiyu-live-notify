@@ -1,0 +1,38 @@
+# PyInstaller 的版本资源文件。
+#
+# 作用：让 exe 的「属性 → 详细信息」里显示版本号，而不是一片空白。
+# 用法：
+#     python -m PyInstaller ... --version-file _build/version_info.txt gui.py
+#
+# 这个文件不是普通 Python 脚本，PyInstaller 会用自己的一套类（VSVersionInfo
+# 等）来 eval 它的内容，所以这里只有一个表达式、没有 import。
+#
+# 改版本号时记得三处一起改：这里、live_notify.VERSION、CHANGELOG.md。
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 1, 0, 0),
+    prodvers=(1, 1, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '080404B0',
+        [StringStruct('CompanyName', 'KagurazakaChizuru'),
+         StringStruct('FileDescription', '大肥鱼直播姬 - 开播自动通知 QQ 群'),
+         StringStruct('FileVersion', '1.1.0'),
+         StringStruct('InternalName', 'dafeiyu-live-notify'),
+         StringStruct('LegalCopyright', 'MIT License'),
+         StringStruct('OriginalFilename', '大肥鱼直播姬.exe'),
+         StringStruct('ProductName', '大肥鱼直播姬'),
+         StringStruct('ProductVersion', '1.1.0')])
+    ]),
+    VarFileInfo([VarStruct('Translation', [0x0804, 1200])])
+  ]
+)
