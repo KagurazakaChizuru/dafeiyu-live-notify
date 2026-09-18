@@ -217,8 +217,8 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("QQ 开播通知器")
-        self.root.geometry("920x780")
-        self.root.minsize(860, 700)
+        self.root.geometry("960x730")
+        self.root.minsize(880, 640)
 
         self.cfg = None
         self.state = STATE_IDLE
@@ -261,30 +261,40 @@ class App:
             pass
         style.configure("Treeview", rowheight=26, font=(FONT, 9))
         style.configure("Treeview.Heading", font=(FONT, 9, "bold"))
-        style.configure("TNotebook.Tab", padding=(18, 8), font=(FONT, 10))
+        style.configure("TNotebook.Tab", padding=(16, 8), font=(FONT, 10))
 
-        # ---------------- 状态条 ----------------
+        # ---------------- 顶部状态区 ----------------
         head = tk.Frame(self.root, background="#f5f6f8")
         head.pack(fill="x")
-        inner = tk.Frame(head, background="#f5f6f8", padx=18, pady=12)
+        inner = tk.Frame(head, background="#f5f6f8", padx=18, pady=11)
         inner.pack(fill="x")
 
+        # 第 1 行：NapCat 连接 —— 一切的前提，放最上面
         self.lbl_conn = tk.Label(inner, text="● 正在检查 …", font=(FONT, 10),
                                  background="#f5f6f8", foreground=MUTED)
         self.lbl_conn.pack(anchor="w")
+
+        # 第 2 行：监控状态
         self.lbl_state = tk.Label(inner, text="", font=(FONT, 11, "bold"),
                                   background="#f5f6f8", foreground=MUTED)
-        self.lbl_state.pack(anchor="w", pady=(4, 0))
+        self.lbl_state.pack(anchor="w", pady=(3, 0))
 
-        # 实时显示"现在检测到哪些直播软件" —— 让你能亲眼看到检测是否生效
-        self.lbl_watch = tk.Label(inner, text="", font=(FONT, 9),
-                                  background="#f5f6f8", foreground=MUTED)
-        self.lbl_watch.pack(anchor="w", pady=(5, 0))
+        # 第 3 行：触发源一览（原来是散在四处的小标签，现在收成一行）
+        self.lbl_sources = tk.Label(inner, text="", font=(FONT, 9),
+                                    background="#f5f6f8", foreground=MUTED,
+                                    justify="left", anchor="w", wraplength=880)
+        self.lbl_sources.pack(anchor="w", fill="x", pady=(5, 0))
+
+        # 告警行：平时为空，出问题（如 NapCat 掉线）才显形
+        self.lbl_alert = tk.Label(inner, text="", font=(FONT, 10, "bold"),
+                                  background="#f5f6f8", foreground=BAD_COLOR,
+                                  justify="left", anchor="w", wraplength=880)
+        self.lbl_alert.pack(anchor="w", fill="x")
 
         tk.Frame(self.root, height=1, background="#dcdde0").pack(fill="x")
 
-        # ---------------- 大按钮区 ----------------
-        main = tk.Frame(self.root, padx=28, pady=22)
+        # ---------------- 主操作区 ----------------
+        main = tk.Frame(self.root, padx=28, pady=18)
         main.pack(fill="x")
 
         self.btn_main = tk.Button(
@@ -293,36 +303,39 @@ class App:
             activebackground=BLUE_DARK, activeforeground="white",
             relief="flat", cursor="hand2", bd=0,
             command=self.toggle_main)
-        self.btn_main.pack(fill="x", ipady=24)
+        self.btn_main.pack(fill="x", ipady=22)
 
-        # 快捷键提醒：直接贴在大按钮正下方，免得开播时忘了按
+        # 快捷键提醒条：贴在大按钮正下方，免得开播时忘了按
         self.lbl_hotkey_hint = tk.Label(
             main, justify="center", font=(FONT, 12, "bold"),
             background="#fff8e1", foreground="#a35b00",
             padx=14, pady=8, wraplength=820)
-        self.lbl_hotkey_hint.pack(fill="x", pady=(14, 0))
+        self.lbl_hotkey_hint.pack(fill="x", pady=(12, 0))
 
         self.lbl_tip = tk.Label(
-            main, justify="center", font=(FONT, 10), foreground=MUTED,
-            text="点一下就开始，之后可以一直挂着。\n"
-                 "它跑在一份独立的 QQ 副本上，你自己聊天的 QQ 不受任何影响。")
-        self.lbl_tip.pack(pady=(12, 0))
+            main, justify="center", font=(FONT, 9), foreground=MUTED,
+            text="点一下就开始，之后可以一直挂着。"
+                 "程序跑在独立的 QQ 副本上，你自己聊天的 QQ 不受影响。")
+        self.lbl_tip.pack(pady=(10, 0))
 
-        # ---------------- 细节标签页 ----------------
+        # ---------------- 标签页 ----------------
         nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True, padx=14, pady=(6, 12))
+        nb.pack(fill="both", expand=True, padx=12, pady=(4, 10))
         self.notebook = nb
 
-        self.tab_groups = ttk.Frame(nb)
-        self.tab_settings = ttk.Frame(nb)
         self.tab_log = ttk.Frame(nb)
+        self.tab_groups = ttk.Frame(nb)
+        self.tab_trigger = ttk.Frame(nb)
+        self.tab_message = ttk.Frame(nb)
         nb.add(self.tab_log, text="运行日志")
-        nb.add(self.tab_groups, text="通知哪些群")
-        nb.add(self.tab_settings, text="通知内容与设置")
+        nb.add(self.tab_groups, text="通知群")
+        nb.add(self.tab_trigger, text="触发方式")
+        nb.add(self.tab_message, text="消息与设置")
 
         self._build_log_tab()
         self._build_groups_tab()
-        self._build_settings_tab()
+        self._build_trigger_tab()
+        self._build_message_tab()
 
     def _build_log_tab(self):
         f = ttk.Frame(self.tab_log, padding=10)
@@ -372,11 +385,108 @@ class App:
         ttk.Button(add, text="添加", width=8,
                    command=self.add_group).pack(side="left", padx=(6, 0))
 
-    def _build_settings_tab(self):
-        outer = ttk.Frame(self.tab_settings, padding=14)
+    def _build_trigger_tab(self):
+        """触发方式独立成页 —— 它决定「能不能用」，不该埋在设置列表底部。"""
+        outer = ttk.Frame(self.tab_trigger, padding=14)
         outer.pack(fill="both", expand=True)
 
-        msg = ttk.LabelFrame(outer, text=" 通知内容 ", padding=12)
+        trig = ttk.LabelFrame(outer, text=" 开播时通知（勾选任意一种即可，可多选） ", padding=14)
+        trig.pack(fill="x")
+        trig.columnconfigure(1, weight=1)
+
+        self.var_platform = tk.BooleanVar()
+        self.var_obs = tk.BooleanVar()
+        self.var_hotkey_on = tk.BooleanVar()
+        self.var_hotkey = tk.StringVar()
+        self.var_proc = tk.BooleanVar()
+        self.var_hotkey.trace_add("write", lambda *a: self._refresh_hotkey_hint())
+        self.var_hotkey_on.trace_add("write", lambda *a: self._refresh_hotkey_hint())
+        # 开关一变，大按钮下面的提示语气也跟着变
+        self.var_platform.trace_add("write", lambda *a: self._refresh_hotkey_hint())
+        self.var_obs.trace_add("write", lambda *a: self._refresh_hotkey_hint())
+
+        # ① 直播间轮询 —— 最通用
+        ttk.Checkbutton(trig, variable=self.var_platform,
+                        text="① 直播间开播时通知　推荐"
+                        ).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(trig, justify="left", foreground=MUTED, wraplength=760,
+                  text="不管用 OBS、直播姬、直播伴侣还是手机开播，只要房间真的开了就能检测到。"
+                  ).grid(row=1, column=0, columnspan=2, sticky="w", padx=(22, 0))
+        self.lbl_platform = ttk.Label(trig, text="直播间状态：—",
+                                      font=(FONT, 9, "bold"), foreground=MUTED)
+        self.lbl_platform.grid(row=2, column=0, columnspan=2, sticky="w",
+                               padx=(22, 0), pady=(2, 12))
+
+        # ② OBS 推流事件
+        ttk.Checkbutton(trig, variable=self.var_obs,
+                        text="② OBS 开始推流时通知"
+                        ).grid(row=3, column=0, columnspan=2, sticky="w")
+        ttk.Label(trig, justify="left", foreground=MUTED, wraplength=760,
+                  text="精确到按下「开始推流」那一刻。需要 OBS 至少启动过一次"
+                       "（WebSocket 默认就是开的，密码程序自动读取）。"
+                  ).grid(row=4, column=0, columnspan=2, sticky="w", padx=(22, 0))
+        self.lbl_obs = ttk.Label(trig, text="OBS 状态：—",
+                                 font=(FONT, 9, "bold"), foreground=MUTED)
+        self.lbl_obs.grid(row=5, column=0, columnspan=2, sticky="w",
+                          padx=(22, 0), pady=(2, 12))
+
+        # ③ 全局快捷键
+        ttk.Checkbutton(trig, variable=self.var_hotkey_on,
+                        text="③ 全局快捷键（兜底）"
+                        ).grid(row=6, column=0, columnspan=2, sticky="w")
+        hkrow = ttk.Frame(trig)
+        hkrow.grid(row=7, column=0, columnspan=2, sticky="w", padx=(22, 0), pady=(4, 12))
+        ttk.Entry(hkrow, textvariable=self.var_hotkey, width=16,
+                  font=(FONT, 9)).pack(side="left")
+        ttk.Button(hkrow, text="按下组合键设置…",
+                   command=self.capture_hotkey).pack(side="left", padx=8)
+        ttk.Label(hkrow, text="任何情况下按一下就推送",
+                  foreground=MUTED).pack(side="left")
+
+        # ④ 进程检测
+        ttk.Checkbutton(trig, variable=self.var_proc,
+                        text="④ 直播软件一启动就通知　不推荐"
+                        ).grid(row=8, column=0, columnspan=2, sticky="w")
+        ttk.Label(trig, justify="left", foreground=MUTED, wraplength=760,
+                  text="打开软件 ≠ 开播。你开软件后还要调设备、试麦，"
+                       "这段时间会白提醒群友一次，所以默认关闭。"
+                  ).grid(row=9, column=0, columnspan=2, sticky="w", padx=(22, 0))
+        self.lbl_process = ttk.Label(trig, text="", font=(FONT, 9), foreground=MUTED)
+        self.lbl_process.grid(row=10, column=0, columnspan=2, sticky="w", padx=(22, 0))
+
+        # ---------------- 下播提示 ----------------
+        off = ttk.LabelFrame(outer, text=" 下播时通知 ", padding=14)
+        off.pack(fill="x", pady=(12, 0))
+        off.columnconfigure(1, weight=1)
+
+        self.var_offline = tk.BooleanVar()
+        self.var_offline_at = tk.BooleanVar()
+        self.var_offline_tpl = tk.StringVar()
+
+        ttk.Checkbutton(off, variable=self.var_offline,
+                        text="下播时也发一条（依赖上面的「直播间开播时通知」）"
+                        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(off, text="文案").grid(row=1, column=0, sticky="nw",
+                                        pady=(10, 0), padx=(22, 8))
+        ttk.Entry(off, textvariable=self.var_offline_tpl, font=(FONT, 9)).grid(
+            row=1, column=1, columnspan=2, sticky="we", pady=(10, 0))
+        ttk.Label(off, foreground=MUTED, wraplength=760, justify="left",
+                  text="占位符：{duration} 会自动填成这次播了多久（如「2 小时 15 分钟」），"
+                       "另外 {title} {link} {time} {date} 也可用"
+                  ).grid(row=2, column=1, columnspan=2, sticky="w", pady=(2, 0))
+        ttk.Checkbutton(off, variable=self.var_offline_at,
+                        text="@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）"
+                        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ttk.Label(off, foreground=MUTED, wraplength=760, justify="left",
+                  text="防误报：状态转离线后先等 60 秒复核，期间恢复直播就取消；"
+                       "轮播状态不会触发下播。"
+                  ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+    def _build_message_tab(self):
+        outer = ttk.Frame(self.tab_message, padding=14)
+        outer.pack(fill="both", expand=True)
+
+        msg = ttk.LabelFrame(outer, text=" 开播通知文案 ", padding=12)
         msg.pack(fill="x")
         msg.columnconfigure(1, weight=1)
 
@@ -422,45 +532,7 @@ class App:
         ttk.Label(beh, text="秒（太快容易被风控）", foreground=MUTED).grid(
             row=1, column=2, columnspan=6, sticky="w", padx=(4, 0), pady=(12, 0))
 
-        # ---------------- 触发方式 ----------------
-        trig = ttk.LabelFrame(outer, text=" 什么才算「开播了」 ", padding=12)
-        trig.pack(fill="x", pady=(12, 0))
-        trig.columnconfigure(1, weight=1)
-
-        self.var_obs = tk.BooleanVar()
-        self.var_proc = tk.BooleanVar()
-        self.var_hotkey = tk.StringVar()
-        self.var_hotkey_on = tk.BooleanVar()
-        # 输入框一改，大按钮下面的提醒立刻跟着变
-        self.var_hotkey.trace_add("write", lambda *a: self._refresh_hotkey_hint())
-        self.var_hotkey_on.trace_add("write", lambda *a: self._refresh_hotkey_hint())
-
-        ttk.Checkbutton(trig, variable=self.var_obs,
-                        text="OBS 开始推流时自动通知（推荐：精确到按下「开始推流」那一刻）"
-                        ).grid(row=0, column=0, columnspan=3, sticky="w")
-        self.lbl_obs = ttk.Label(trig, text="OBS 状态：—", foreground=MUTED)
-        self.lbl_obs.grid(row=1, column=0, columnspan=3, sticky="w", padx=(22, 0), pady=(2, 8))
-
-        ttk.Checkbutton(trig, variable=self.var_hotkey_on,
-                        text="全局快捷键（直播姬 / 直播伴侣 没有接口，用这个手动触发）"
-                        ).grid(row=2, column=0, columnspan=3, sticky="w")
-        ttk.Entry(trig, textvariable=self.var_hotkey, width=16,
-                  font=(FONT, 9)).grid(row=3, column=0, sticky="w", padx=(22, 8), pady=(4, 8))
-        ttk.Button(trig, text="按下组合键设置…",
-                   command=self.capture_hotkey).grid(row=3, column=1, sticky="w", pady=(4, 8))
-        ttk.Label(trig, text="点左边按钮直接按组合键，也可以在上面手动输入",
-                  foreground=MUTED).grid(row=3, column=2, sticky="w", padx=(10, 0))
-
-        ttk.Checkbutton(trig, variable=self.var_proc,
-                        text="直播软件一启动就通知（不推荐 —— 你开软件后还要调设备、试麦，"
-                             "这段时间会白提醒一次）"
-                        ).grid(row=4, column=0, columnspan=3, sticky="w")
-        ttk.Label(trig, text="注意：OBS 的 WebSocket 需要先启动过一次 OBS 才会生成配置；"
-                             "它默认就是开启的，端口 4455，密码程序会自动读取。",
-                  foreground=MUTED, wraplength=840, justify="left").grid(
-            row=5, column=0, columnspan=3, sticky="w", pady=(8, 0))
-
-        proc = ttk.LabelFrame(outer, text=" 进程名单（仅当上面勾了「软件一启动就通知」时生效） ", padding=12)
+        proc = ttk.LabelFrame(outer, text=" 进程名单（仅当勾了「④ 直播软件一启动就通知」时生效） ", padding=12)
         proc.pack(fill="x", pady=(12, 0))
         self.var_procs = tk.StringVar()
         ttk.Entry(proc, textvariable=self.var_procs, font=(FONT, 9)).pack(fill="x")
@@ -632,9 +704,15 @@ class App:
         t = self.cfg.get("trigger") or {}
         self.var_obs.set(bool(t.get("on_obs_stream", True)))
         self.var_proc.set(bool(t.get("on_process_start", False)))
+        self.var_platform.set(bool(t.get("on_platform_live", False)))
         self.var_hotkey_on.set(bool(t.get("hotkey")))
         self.var_hotkey.set(t.get("hotkey") or "ctrl+alt+k")
         self._refresh_hotkey_hint()
+
+        om = self.cfg.get("offline_message") or {}
+        self.var_offline.set(bool(om.get("enabled", True)))
+        self.var_offline_at.set(bool(om.get("at_all", False)))
+        self.var_offline_tpl.set(om.get("template") or "")
 
         self._refresh_group_tree()
 
@@ -673,10 +751,25 @@ class App:
                 if len(parts) < 2:
                     raise ValueError("快捷键格式不对：至少一个修饰键 + 一个键，"
                                      "例如 ctrl+alt+l")
+            # 保留 room_id / poll_seconds / platform_proxy —— 界面上不暴露，
+            # 但重写 trigger 块时绝不能把它们弄丢
+            old_t = self.cfg.get("trigger") or {}
             self.cfg["trigger"] = {
                 "on_obs_stream": bool(self.var_obs.get()),
                 "on_process_start": bool(self.var_proc.get()),
+                "on_platform_live": bool(self.var_platform.get()),
                 "hotkey": hk,
+                "room_id": old_t.get("room_id"),
+                "poll_seconds": old_t.get("poll_seconds", 30),
+                "platform_proxy": old_t.get("platform_proxy", ""),
+            }
+            old_o = self.cfg.get("offline_message") or {}
+            self.cfg["offline_message"] = {
+                "enabled": bool(self.var_offline.get()),
+                "template": (self.var_offline_tpl.get().strip()
+                             or "🌙 下播啦，今晚播了 {duration}"),
+                "at_all": bool(self.var_offline_at.get()),
+                "grace_seconds": old_o.get("grace_seconds", 60),
             }
         except ValueError as exc:
             return str(exc)
@@ -905,8 +998,8 @@ class App:
     # ==================================================================
 
     def _poll_processes(self):
-        """每 3 秒把"当前检测到的直播软件"显示出来，让检测逻辑可见。"""
-        if self.cfg:
+        """只有启用了进程检测才显示它 —— 否则这行纯属噪音。"""
+        if self.cfg and self.var_proc.get():
             watch = list(self.cfg["watch"]["processes"])
 
             def work():
@@ -914,23 +1007,19 @@ class App:
 
             def done(hits):
                 if isinstance(hits, Exception):
-                    self.lbl_watch.config(text="○ 进程检测出错：{}".format(hits),
-                                          foreground=BAD_COLOR)
+                    self.lbl_process.config(text="进程检测出错：{}".format(hits),
+                                            foreground=BAD_COLOR)
                 elif hits:
-                    self.lbl_watch.config(
+                    self.lbl_process.config(
                         text="● 已检测到直播软件：{}".format("、".join(hits)),
                         foreground=OK_COLOR)
-                elif self.state == STATE_RUNNING:
-                    self.lbl_watch.config(
-                        text="○ 监控中，暂未检测到直播软件"
-                             "（打开 OBS / 直播伴侣 / 直播姬 就会自动通知）",
-                        foreground=MUTED)
                 else:
-                    self.lbl_watch.config(
-                        text="○ 监控未开启 —— 点上面的大按钮才会自动通知",
-                        foreground=BAD_COLOR)
+                    self.lbl_process.config(text="○ 暂未检测到名单里的进程",
+                                            foreground=MUTED)
 
             self.run_async(work, done)
+        elif hasattr(self, "lbl_process"):
+            self.lbl_process.config(text="")
 
         self.root.after(3000, self._poll_processes)
 
@@ -943,8 +1032,7 @@ class App:
         if self.state == STATE_RUNNING and not self._recovering and not port_open(3000):
             self._recovering = True
             core.log("检测到 NapCat 掉线，正在自动重启 …", "WARN")
-            self.lbl_watch.config(text="⚠ NapCat 掉线了，正在自动重连 …",
-                                  foreground=BAD_COLOR)
+            self.lbl_alert.config(text="⚠ NapCat 掉线了，正在自动重连 …")
 
             def work():
                 ok, _ = start_napcat()
@@ -956,8 +1044,10 @@ class App:
                 self._recovering = False
                 if ok:
                     core.log("NapCat 已重新连上，通知功能恢复正常。")
+                    self.lbl_alert.config(text="")
                 else:
                     core.log("NapCat 自动重启失败。", "ERROR")
+                    self.lbl_alert.config(text="⚠ NapCat 重启失败，通知发不出去")
                     messagebox.showwarning(
                         "NapCat 掉线了",
                         "通知暂时发不出去。\n\n"
@@ -965,6 +1055,8 @@ class App:
                         "如果反复失败，查看「运行日志」标签页。")
 
             self.run_async(work, done)
+        elif self.state != STATE_RUNNING:
+            self.lbl_alert.config(text="")
 
         self.root.after(8000, self._poll_health)
 
@@ -978,44 +1070,95 @@ class App:
 
             def done(res):
                 if isinstance(res, Exception) or not isinstance(res, dict):
-                    self.lbl_obs.config(text="OBS 状态：读取失败", foreground=MUTED)
+                    self.lbl_sources.config(text="触发源：状态读取失败", foreground=MUTED)
+                    self.lbl_obs.config(text="OBS 状态：—", foreground=MUTED)
+                    self.lbl_platform.config(text="直播间状态：—", foreground=MUTED)
                     return
+                src = res.get("trigger_sources") or {}
                 obs = res.get("obs") or "未启用"
-                hk = (res.get("trigger_sources") or {}).get("hotkey")
-                txt = "OBS 状态：{}".format(obs)
+                pf = res.get("platform") or "未启用"
+                hk = src.get("hotkey")
+                ok_hk = res.get("hotkey_ok")
+
+                # ---- 顶部汇总行 ----
+                bits = []
+                if src.get("platform_live"):
+                    if "正在直播" in pf:
+                        bits.append("直播间 直播中")
+                    elif "未开播" in pf:
+                        bits.append("直播间 未开播")
+                    else:
+                        bits.append("直播间 " + pf)
+                if src.get("obs_stream"):
+                    if "正在推流" in obs:
+                        bits.append("OBS 推流中")
+                    elif "已连接" in obs:
+                        bits.append("OBS 已连接")
+                    else:
+                        bits.append("OBS 未连接")
                 if hk:
-                    txt += "　|　快捷键 {} 已就绪".format(hk.upper())
-                color = OK_COLOR if "正在推流" in obs else MUTED
-                self.lbl_obs.config(text=txt, foreground=color)
+                    bits.append("快捷键 {}：{}".format(
+                        hk.upper(), "就绪" if ok_hk else "注册失败"))
+                if src.get("process_start"):
+                    bits.append("进程检测")
+                if bits:
+                    self.lbl_sources.config(text="触发源　" + "　·　".join(bits),
+                                            foreground=MUTED)
+                else:
+                    self.lbl_sources.config(text="触发源：一个都没启用，不会自动通知",
+                                            foreground=BAD_COLOR)
+
+                # ---- 触发方式页里的详细状态 ----
+                off = "已开启" if res.get("offline_message") else "已关闭"
+                self.lbl_platform.config(
+                    text="直播间状态：{}　|　下播提示 {}".format(pf, off),
+                    foreground=OK_COLOR if "正在直播" in pf else MUTED)
+                self.lbl_obs.config(
+                    text="OBS 状态：{}".format(obs),
+                    foreground=OK_COLOR if "正在推流" in obs else MUTED)
 
             self.run_async(work, done)
         else:
-            self.lbl_obs.config(text="OBS 状态：监控未开启", foreground=MUTED)
+            self.lbl_sources.config(text="触发源　监控未开启", foreground=MUTED)
+            self.lbl_obs.config(text="OBS 状态：—", foreground=MUTED)
+            self.lbl_platform.config(text="直播间状态：—", foreground=MUTED)
 
         self.root.after(4000, self._poll_trigger)
 
     def _refresh_hotkey_hint(self):
-        """刷新大按钮下面那条快捷键提醒。"""
+        """刷新大按钮下面那条提示。
+
+        有了直播间轮询之后，快捷键从「必须记得按」降级成「备用手段」，
+        语气也得跟着变 —— 否则用户会以为不按就不会通知。
+        """
         if not hasattr(self, "lbl_hotkey_hint"):
             return
         t = (self.cfg or {}).get("trigger") or {}
         hk = (self.var_hotkey.get() if hasattr(self, "var_hotkey") else "") or t.get("hotkey") or ""
-        on = self.var_hotkey_on.get() if hasattr(self, "var_hotkey_on") else bool(hk)
+        hk_on = self.var_hotkey_on.get() if hasattr(self, "var_hotkey_on") else bool(hk)
+        auto = self.var_platform.get() if hasattr(self, "var_platform") else bool(t.get("on_platform_live"))
+        obs_on = self.var_obs.get() if hasattr(self, "var_obs") else bool(t.get("on_obs_stream"))
 
-        if hk and on:
+        if auto or obs_on:
+            what = []
+            if auto:
+                what.append("直播间开播")
+            if obs_on:
+                what.append("OBS 推流")
+            text = "已开启自动检测（{}）—— 开播时会自动通知，你不用做任何事".format(
+                " + ".join(what))
+            if hk and hk_on:
+                text += "\n快捷键 {} 是备用：想随时手动推一次就按它".format(hk.upper())
+            self.lbl_hotkey_hint.config(background="#e8f5e9", foreground="#1b5e20",
+                                        text=text)
+        elif hk and hk_on:
             self.lbl_hotkey_hint.config(
                 background="#fff8e1", foreground="#a35b00",
-                text="⚠ 用 直播姬 / 直播伴侣 开播时，记得按一下  {}  \n"
-                     "（用 OBS 开播不用按，它会自动通知）".format(hk.upper()))
-        elif hk and not on:
-            self.lbl_hotkey_hint.config(
-                background="#f1f3f4", foreground=MUTED,
-                text="快捷键已关闭 —— 用 直播姬 / 直播伴侣 开播时不会自动通知，\n"
-                     "只能靠界面上的「立即发送」或控制端口手动触发")
+                text="⚠ 没开自动检测 —— 开播时记得按一下  {}  ".format(hk.upper()))
         else:
             self.lbl_hotkey_hint.config(
                 background="#fdecea", foreground=BAD_COLOR,
-                text="⚠ 还没有设置快捷键 —— 用 直播姬 / 直播伴侣 开播时不会自动通知")
+                text="⚠ 自动检测和快捷键都没开 —— 开播时不会通知任何人")
 
     def capture_hotkey(self):
         """弹窗：让用户直接按下组合键来设置快捷键（比手打直观，也不会写错格式）。"""

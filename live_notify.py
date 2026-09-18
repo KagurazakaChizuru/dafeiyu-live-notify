@@ -265,6 +265,24 @@ def load_config(path):
         "link": str(message.get("link") or ""),
     }
 
+    # --- offline_message：下播提示 ---
+    offline = raw.get("offline_message") or {}
+    if not isinstance(offline, dict):
+        raise ConfigError("offline_message 必须是一个对象。")
+    try:
+        offline_grace = float(offline.get("grace_seconds", 60) or 0)
+    except (TypeError, ValueError):
+        raise ConfigError("offline_message.grace_seconds 必须是数字。")
+    offline_cfg = {
+        "enabled": bool(offline.get("enabled", True)),
+        "template": str(offline.get("template")
+                        or "🌙 下播啦，今晚播了 {duration}\n\n谢谢大家陪播～"),
+        # 下播默认不 @ 任何人：没在看直播的人不会关心你几点停
+        "at_all": bool(offline.get("at_all", False)),
+        # 状态转离线后先等这么久再确认，用来过滤断流重连造成的假下播
+        "grace_seconds": offline_grace,
+    }
+
     # --- behavior / control ---
     behavior = raw.get("behavior") or {}
     if not isinstance(behavior, dict):
@@ -292,12 +310,39 @@ def load_config(path):
     trigger = raw.get("trigger") or {}
     if not isinstance(trigger, dict):
         raise ConfigError("trigger 必须是一个对象。")
+
+    try:
+        poll_seconds = float(trigger.get("poll_seconds", 30) or 30)
+    except (TypeError, ValueError):
+        raise ConfigError("trigger.poll_seconds 必须是数字。")
+    if not (5 <= poll_seconds <= 3600):
+        raise ConfigError("trigger.poll_seconds 取值应在 5 ~ 3600 秒之间。")
+
+    room_raw = trigger.get("room_id")
+    room_id = None
+    if room_raw not in (None, "", 0, "0"):
+        try:
+            room_id = int(room_raw)
+        except (TypeError, ValueError):
+            raise ConfigError(
+                "trigger.room_id 必须是数字，或留空以从直播间链接自动识别。")
+    if room_id is None and triggers is not None:
+        # 房间号没填就从他已有的直播间链接里抠，省一次手工配置
+        room_id = triggers.guess_bilibili_room_id(msg_cfg["link"])
+
     trigger_cfg = {
         # 进程检测的硬伤：软件一打开就触发，而人往往还要调设备、试麦。
         # 所以默认关闭，改用更精确的信号。
         "on_process_start": bool(trigger.get("on_process_start", False)),
         "on_obs_stream": bool(trigger.get("on_obs_stream", True)),
+        # 轮询直播间状态。唯一与开播软件无关的触发源，含手机开播。
+        # 注意：开启后程序会定期访问直播平台的公开接口（默认直连，不走代理）。
+        "on_platform_live": bool(trigger.get("on_platform_live", False)),
         "hotkey": str(trigger.get("hotkey") or "").strip().lower(),
+        "room_id": room_id,
+        "poll_seconds": poll_seconds,
+        # 留空 = 直连。境内平台走境外代理只会更慢，代理关掉还会直接失败。
+        "platform_proxy": str(trigger.get("platform_proxy") or "").strip(),
     }
 
     return {
@@ -312,6 +357,7 @@ def load_config(path):
         "behavior": behavior_cfg,
         "control": control_cfg,
         "trigger": trigger_cfg,
+        "offline_message": offline_cfg,
         "_path": os.path.abspath(path),
     }
 
@@ -515,20 +561,27 @@ def resolve_role(onebot, group_id, self_id):
 # 消息构造
 # --------------------------------------------------------------------------
 
-def render_text(cfg):
+def render_text(cfg, template=None, extra=None):
+    """渲染消息文本。
+
+    template 为 None 时用开播通知的模板；extra 用于补充额外占位符
+    （例如下播提示的 {duration}）。
+    """
     fields = {
         "title": cfg["message"]["title"],
         "link": cfg["message"]["link"],
         "time": datetime.now().strftime("%H:%M"),
         "date": datetime.now().strftime("%Y-%m-%d"),
     }
-    template = cfg["message"]["template"]
+    if extra:
+        fields.update(extra)
+    tpl = template if template is not None else cfg["message"]["template"]
     try:
-        return template.format(**fields)
+        return tpl.format(**fields)
     except (KeyError, IndexError, ValueError):
         log("消息模板占位符有问题，已按原文发送。可用占位符：{}".format(
             "、".join("{" + k + "}" for k in fields)), "WARN")
-        text = template
+        text = tpl
         for key, val in fields.items():
             text = text.replace("{" + key + "}", val)
         return text
@@ -568,10 +621,17 @@ def describe_message(group, segments):
 # 发送
 # --------------------------------------------------------------------------
 
-def send_to_groups(cfg, onebot, reason, force_dry=False):
-    """向所有启用的群发送通知。返回成功数。"""
+def send_to_groups(cfg, onebot, reason, force_dry=False,
+                   template=None, extra_fields=None, at_all=None):
+    """向所有启用的群发送通知。返回成功数。
+
+    template / extra_fields / at_all 用于发送另一类消息（目前是下播提示）：
+      · template     —— 换一套模板
+      · extra_fields —— 补充额外占位符（如 {duration}）
+      · at_all       —— 覆盖各群自己的 @ 设置；None 表示沿用群配置
+    """
     dry = cfg["behavior"]["dry_run"] or force_dry
-    text = render_text(cfg)
+    text = render_text(cfg, template=template, extra=extra_fields)
     active = [g for g in cfg["groups"] if g["enabled"]]
     if not active:
         log("没有任何启用的群（enabled 全是 false），什么都没发。", "WARN")
@@ -583,8 +643,13 @@ def send_to_groups(cfg, onebot, reason, force_dry=False):
 
     ok_count = 0
     for idx, group in enumerate(active):
-        segments = build_message(group, text)
-        preview = describe_message(group, segments)
+        target = group
+        if at_all is not None:
+            # 覆盖 @ 行为：下播提示默认谁都不 @
+            target = dict(group, at_all=bool(at_all),
+                          at_list=[] if at_all else [])
+        segments = build_message(target, text)
+        preview = describe_message(target, segments)
         label = "{}{}".format(group["group_id"],
                               "（{}）".format(group["note"]) if group["note"] else "")
 
@@ -778,10 +843,15 @@ def cmd_watch(cfg, stop_event=None):
         log("程序会继续运行，但开播时可能发不出去。请检查 NapCat 是否已启动并登录。", "WARN")
 
     tg = cfg.get("trigger") or {}
+    offline_cfg = cfg.get("offline_message") or {}
     gate = triggers.CooldownGate(cfg["behavior"]["cooldown_minutes"]) if triggers else None
-    state = {"last_fire": 0.0}
+    # 下播用**独立**闸门：它和开播是两件事，绝不能被开播那份 30 分钟冷却吃掉。
+    # 否则「播了 10 分钟就下播」时，下播提示会被静默丢弃。
+    offline_gate = triggers.CooldownGate(0) if triggers else None
+    state = {"last_fire": 0.0, "last_offline": 0.0}
     obs = None
     hotkey = None
+    platform = None
 
     def fire(reason):
         """所有触发源的统一出口：先过冷却闸门，再真正发送。
@@ -801,6 +871,26 @@ def cmd_watch(cfg, stop_event=None):
 
     engine = TriggerEngine(cfg, fire) if tg.get("on_process_start") else None
 
+    def fire_offline(duration):
+        """下播提示。走独立闸门，且默认谁都不 @。"""
+        if not offline_cfg.get("enabled", True):
+            log("下播提示已关闭，跳过。")
+            return False
+        if offline_gate is not None:
+            allowed, _ = offline_gate.allow()
+            if not allowed:
+                log("下播提示还在冷却期，跳过。", "WARN")
+                return False
+            offline_gate.mark()
+        state["last_offline"] = time.time()
+        send_to_groups(
+            cfg, onebot,
+            "直播间已下播（时长 {}）".format(duration or "未知"),
+            template=offline_cfg.get("template"),
+            extra_fields={"duration": duration or "一会儿"},
+            at_all=bool(offline_cfg.get("at_all", False)))
+        return True
+
     def manual_trigger():
         fire("手动触发（控制端口）")
         return {"ok": True, "message": "已触发一次发送，详见控制台日志"}
@@ -811,13 +901,18 @@ def cmd_watch(cfg, stop_event=None):
             "trigger_sources": {
                 "process_start": bool(engine),
                 "obs_stream": bool(tg.get("on_obs_stream")),
+                "platform_live": bool(platform),
                 "hotkey": tg.get("hotkey") or None,
             },
             "obs": obs.status_text() if obs else None,
+            "platform": platform.status_text() if platform else None,
+            "offline_message": bool(offline_cfg.get("enabled", True)),
             "hotkey_ok": hotkey.registered if hotkey else None,
             "groups": [g["group_id"] for g in cfg["groups"] if g["enabled"]],
             "last_fire": (datetime.fromtimestamp(state["last_fire"]).strftime("%Y-%m-%d %H:%M:%S")
                           if state["last_fire"] else None),
+            "last_offline": (datetime.fromtimestamp(state["last_offline"]).strftime("%Y-%m-%d %H:%M:%S")
+                             if state["last_offline"] else None),
         }
 
     httpd = None
@@ -833,11 +928,31 @@ def cmd_watch(cfg, stop_event=None):
         hotkey = triggers.HotkeyListener(tg["hotkey"], fire, stop_event,
                                          on_status=lambda t: log("快捷键：{}".format(t)))
         hotkey.start()
+    if triggers is not None and tg.get("on_platform_live"):
+        room_id = tg.get("room_id")
+        if not room_id:
+            log("直播间轮询已启用，但没能确定房间号。请在 message.link 里写完整的"
+                "直播间链接（如 https://live.bilibili.com/12345），或直接填 "
+                "trigger.room_id。", "WARN")
+        else:
+            platform = triggers.PlatformWatcher(
+                room_id=room_id,
+                on_live=lambda: fire("直播间已开播"),
+                on_offline=fire_offline,
+                stop_event=stop_event,
+                poll_seconds=tg.get("poll_seconds", 30),
+                offline_grace=offline_cfg.get("grace_seconds", 60),
+                proxy=tg.get("platform_proxy", ""),
+                on_status=lambda t: log("直播间：{}".format(t)))
+            platform.start()
 
     log("=" * 62)
     log("开始监控。按 Ctrl+C 退出。")
     log("目标群数：{}".format(len([g for g in cfg["groups"] if g["enabled"]])))
     log("触发方式：")
+    if platform is not None:
+        log("  · 直播间轮询 —— 房间 {}，每 {} 秒查一次（与开播软件无关）".format(
+            tg.get("room_id"), int(tg.get("poll_seconds", 30))))
     if obs is not None:
         log("  · OBS 推流事件 —— 精确到「你按下开始推流」那一刻")
     if hotkey is not None:
@@ -846,9 +961,15 @@ def cmd_watch(cfg, stop_event=None):
         log("  · 进程检测：{}".format("、".join(cfg["watch"]["processes"])))
         log("    （检查间隔 {} 秒，防抖 {} 次）".format(
             cfg["watch"]["interval_seconds"], cfg["watch"]["confirm_checks"]))
-    if obs is None and hotkey is None and engine is None:
+    if platform is None and obs is None and hotkey is None and engine is None:
         log("  · 无 —— 只能通过控制端口手动触发", "WARN")
-    log("冷却 {} 分钟".format(cfg["behavior"]["cooldown_minutes"]))
+    log("开播冷却 {} 分钟".format(cfg["behavior"]["cooldown_minutes"]))
+    if offline_cfg.get("enabled", True):
+        log("下播提示：已开启（离线确认宽限 {} 秒，{}）".format(
+            int(offline_cfg.get("grace_seconds", 60)),
+            "@全体成员" if offline_cfg.get("at_all") else "不 @ 任何人"))
+    else:
+        log("下播提示：已关闭")
     if cfg["behavior"]["dry_run"]:
         log("当前是彩排模式（dry_run=true），不会真的发消息。", "WARN")
     log("=" * 62)

@@ -24,10 +24,14 @@ import ctypes
 import hashlib
 import json
 import os
+import re
 import socket
 import struct
 import threading
 import time
+import urllib.error
+import urllib.request
+from datetime import datetime
 
 try:
     from ctypes import wintypes
@@ -433,3 +437,225 @@ class HotkeyListener(threading.Thread):
         finally:
             user32.UnregisterHotKey(None, self.hotkey_id)
             self.registered = False
+
+
+# --------------------------------------------------------------------------
+#  直播平台轮询
+# --------------------------------------------------------------------------
+
+STATUS_OFFLINE = 0
+STATUS_LIVE = 1
+STATUS_ROUND = 2          # 轮播（自动重播），不算开播
+
+
+def _http_json(url, timeout=10, proxy=""):
+    """取 JSON。
+
+    proxy 为空表示**直连**，这是本项目的默认选择。原因：这类机器通常
+    挂着 Clash 之类的全局代理，而直播平台是境内服务，走境外节点只会更慢；
+    更糟的是代理关掉之后注册表设置仍然在，请求会打到死端口上直接失败。
+    """
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+        "Accept": "application/json",
+    })
+    if proxy:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    else:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8", "replace"))
+
+
+def guess_bilibili_room_id(link):
+    """从直播间链接里抠出房间号，省得用户再填一遍。
+
+    https://live.bilibili.com/12345678?spm=xxx   ->   12345678
+    """
+    m = re.search(r"live\.bilibili\.com/(\d+)", link or "")
+    return int(m.group(1)) if m else None
+
+
+def format_duration(seconds):
+    """把秒数说成人话。"""
+    seconds = int(seconds or 0)
+    if seconds <= 0:
+        return "一小会儿"
+    if seconds < 60:
+        return "不到 1 分钟"
+    minutes = seconds // 60
+    hours, minutes = divmod(minutes, 60)
+    if hours and minutes:
+        return "{} 小时 {} 分钟".format(hours, minutes)
+    if hours:
+        return "{} 小时".format(hours)
+    return "{} 分钟".format(minutes)
+
+
+class BilibiliRoom:
+    """B站直播间状态查询。
+
+    用的是公开接口，**不需要登录、不需要签名、不需要 cookie**：
+
+        GET https://api.live.bilibili.com/room/v1/Room/get_info?room_id=<id>
+        ->  data.live_status : 0=未开播  1=直播中  2=轮播
+    """
+
+    API = "https://api.live.bilibili.com/room/v1/Room/get_info"
+
+    def __init__(self, room_id, timeout=10, proxy=""):
+        self.room_id = int(room_id)
+        self.timeout = timeout
+        self.proxy = proxy
+
+    def fetch(self):
+        """返回 (live_status, room_info)。失败时抛异常。"""
+        url = "{}?room_id={}".format(self.API, self.room_id)
+        raw = _http_json(url, timeout=self.timeout, proxy=self.proxy)
+        if raw.get("code") != 0:
+            raise RuntimeError("B站接口返回 code={} {}".format(
+                raw.get("code"), raw.get("message")))
+        data = raw.get("data") or {}
+        return int(data.get("live_status", 0)), data
+
+
+class PlatformWatcher(threading.Thread):
+    """轮询直播间状态，检测「开播」与「下播」两个事件。
+
+    这是唯一一个**与开播软件无关**的触发源：不管用 OBS、直播姬、
+    直播伴侣，还是干脆用手机开播，只要房间状态变了就能检测到。
+    而且它读到的是平台判定的真值 —— 群友要知道的正是「房间开了」。
+
+    语义要点（这几条决定了它不会打扰人）：
+
+    * **只在状态跳变时触发**，直播期间不会反复发。
+    * **启动时若已在直播，不补发开播通知**，否则每重启一次程序，
+      群友就多收一条。要补发用界面上的「立即发送」。
+    * **下播有宽限期**：状态转为离线后先等 `offline_grace` 秒再复核，
+      期间若恢复直播则取消。用来过滤断流重连造成的假下播。
+    * `live_status == 2`（轮播）按离线处理，但**不触发下播通知** ——
+      轮播本来就不是你在播。
+    """
+
+    def __init__(self, room_id, on_live, on_offline, stop_event,
+                 poll_seconds=30, offline_grace=60, proxy="",
+                 on_status=None, room=None):
+        super().__init__(daemon=True, name="platform-watcher")
+        self.room = room or BilibiliRoom(room_id, proxy=proxy)
+        self.on_live = on_live
+        self.on_offline = on_offline
+        self.stop_event = stop_event
+        self.poll_seconds = max(5.0, float(poll_seconds or 30))
+        self.offline_grace = max(0.0, float(offline_grace or 0))
+        self.on_status = on_status or (lambda text: None)
+
+        self.state = "unknown"          # unknown / live / offline
+        self.live_since = None
+        self._offline_since = None
+        self.last_error = None
+        self.last_status = None
+
+    # ---- 对外状态 ----
+    def status_text(self):
+        if self.last_error:
+            return "直播间查询失败：{}".format(self.last_error)
+        if self.state == "live":
+            return "直播间正在直播"
+        if self.state == "offline":
+            return "直播间未开播"
+        return "等待首次查询"
+
+    def run(self):
+        while not self.stop_event.is_set():
+            try:
+                status, data = self.room.fetch()
+                self.last_error = None
+                self._tick(status, data)
+            except Exception as exc:
+                self.last_error = str(exc)
+                self.on_status("直播间查询失败：{}".format(exc))
+                _log("直播间状态查询失败：{}".format(exc), "WARN")
+            self._sleep(self.poll_seconds)
+
+    def _sleep(self, seconds):
+        end = time.time() + seconds
+        while time.time() < end:
+            if self.stop_event.is_set():
+                return
+            time.sleep(0.2)
+
+    def _tick(self, status, data):
+        now = time.time()
+        self.last_status = status
+
+        if status == STATUS_LIVE:
+            self._offline_since = None
+            if self.state == "offline":
+                # 只有从「已确认离线」跳到直播，才算一次真的开播
+                self._enter_live(now, data, fire=True)
+            elif self.state == "unknown":
+                self._enter_live(now, data, fire=False)
+            else:
+                self.state = "live"
+            return
+
+        # ---- 离线(0) 或 轮播(2) ----
+        if self.state == "live" and status == STATUS_OFFLINE:
+            if self._offline_since is None:
+                self._offline_since = now
+                if self.offline_grace > 0:
+                    self.on_status("疑似下播，{} 秒后确认 …".format(int(self.offline_grace)))
+                    return
+            if (self.offline_grace > 0
+                    and now - self._offline_since >= self.offline_grace):
+                self._declare_offline(now)
+            elif self.offline_grace == 0:
+                self._declare_offline(now)
+            return
+
+        # 轮播、或本来就是离线：归为离线，且不发下播通知
+        if self.state != "offline":
+            self.state = "offline"
+            self._offline_since = None
+            self.live_since = None
+            self.on_status("直播间未开播")
+
+    def _enter_live(self, now, data, fire):
+        self.state = "live"
+        self.live_since = self._parse_live_time(data) or now
+        if fire:
+            self.on_status("直播间已开播")
+            _log("直播间已开播")
+            try:
+                self.on_live()
+            except Exception as exc:
+                _log("开播通知发送出错：{}".format(exc), "ERROR")
+        else:
+            self.on_status("直播间已在直播中（不补发通知）")
+            _log("启动时直播间已在直播中，不补发开播通知")
+
+    def _declare_offline(self, now):
+        duration = format_duration(now - self.live_since) if self.live_since else ""
+        self.state = "offline"
+        self._offline_since = None
+        self.on_status("直播间已下播")
+        _log("直播间已下播，时长 {}".format(duration or "未知"))
+        try:
+            self.on_offline(duration)
+        except Exception as exc:
+            _log("下播通知发送出错：{}".format(exc), "ERROR")
+        self.live_since = None
+
+    @staticmethod
+    def _parse_live_time(data):
+        """从接口的 live_time 字段取开播时刻；取不到返回 None。"""
+        raw = (data or {}).get("live_time")
+        if not raw or str(raw).startswith("0000"):
+            return None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(raw, fmt).timestamp()
+            except ValueError:
+                continue
+        return None

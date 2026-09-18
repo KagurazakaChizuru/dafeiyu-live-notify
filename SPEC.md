@@ -111,7 +111,53 @@ NapCat 默认启动注册表里那个 QQ 安装。QQ 桌面端是单实例的，
 
 ### 5.1 触发源规格
 
-#### 5.1.1 ObsWatcher —— OBS 推流事件（首选）
+#### 5.1.1 PlatformWatcher —— 直播间状态轮询（首选）
+
+| 项 | 规格 |
+|---|---|
+| 数据来源 | `GET https://api.live.bilibili.com/room/v1/Room/get_info?room_id=<id>` |
+| 鉴权 | **无需**登录 / 签名 / cookie |
+| 关键字段 | `data.live_status`：`0`=未开播，`1`=直播中，`2`=轮播 |
+| 轮询间隔 | 默认 30 秒（可配 5 ~ 3600） |
+| 房间号来源 | 优先 `trigger.room_id`；留空则从 `message.link` 正则提取 |
+| 网络策略 | **默认直连，不走系统代理**（见 §11.3 T17） |
+
+**为什么它是首选的触发源**：它是唯一**与开播软件无关**的信号。
+不管用户用 OBS、直播姬、直播伴侣，还是干脆用手机开播，只要房间真的开了就能检测到；
+而且读到的是**平台判定的真值** —— 群友要知道的正是「房间开了」，
+而不是「用户点了某个按钮」（这两者可能因推流失败、断流而不一致）。
+
+**状态机规格**：
+
+```
+state ∈ {unknown, live, offline}        初始 unknown
+
+收到 live_status == 1：
+    state == offline  →  触发 on_live，state := live
+    state == unknown  →  **不触发**（启动时已在直播不补发），state := live
+    state == live     →  无动作
+
+收到 live_status == 0：
+    state == live     →  记录 offline_since；持续 ≥ offline_grace 后触发 on_offline
+    state == offline  →  无动作（不重复报下播）
+
+收到 live_status == 2（轮播）：
+    按离线处理，但**不触发** on_offline —— 轮播本来就不是用户在播
+```
+
+**四条防打扰设计**（每条都对应一种会被用户投诉的行为）：
+
+| 设计 | 防止的问题 |
+|---|---|
+| 只在状态跳变时触发 | 直播期间反复发通知 |
+| 启动时已在直播不补发 | 每重启一次程序，群友就多收一条 |
+| 离线宽限期（默认 60 秒） | 断流重连被误判为下播 |
+| 轮播不触发下播 | 自动重播被误判为「播完了」 |
+
+**时长计算**：优先解析接口的 `live_time` 字段（形如 `2026-09-17 22:30:00`）；
+为 `0000-00-00 00:00:00`（离线占位）或解析失败时，退回使用本地观测到的进入直播时刻。
+
+#### 5.1.2 ObsWatcher —— OBS 推流事件
 
 | 项 | 规格 |
 |---|---|
@@ -203,12 +249,39 @@ fire(reason):
 
 ### 5.3 触发语义矩阵
 
-| `on_process_start` | `on_obs_stream` | `hotkey` | 实际行为 |
-|---|---|---|---|
-| false | true | 有 | OBS 全自动；直播姬/直播伴侣靠热键 |
-| false | false | 有 | 全部靠热键 |
-| true | true | 有 | 三者并存（进程检测会误报，不推荐） |
-| false | false | 空 | 只能通过控制端口手动触发（界面会告警） |
+| `on_platform_live` | `on_obs_stream` | `hotkey` | `on_process_start` | 实际行为 |
+|---|---|---|---|---|
+| true | true | 有 | false | **推荐配置**：全自动，三种信号互为补充 |
+| true | false | 空 | false | 完全靠直播间轮询（与开播软件无关） |
+| false | true | 有 | false | OBS 全自动；直播姬/直播伴侣靠热键 |
+| false | false | 有 | false | 全部靠热键 |
+| true | true | 有 | true | 四者并存（进程检测会误报，不推荐） |
+| false | false | 空 | false | 只能通过控制端口手动触发（界面会告警） |
+
+### 5.4 下播通知的独立闸门
+
+**这是必须的，不是可选项。**
+
+开播侧有 `behavior.cooldown_minutes`（默认 30 分钟）的冷却，用于防止同一次开播被多个
+触发源重复通知。但**下播通知不能共用这个闸门** —— 否则用户只播了 10 分钟就下播时，
+下播通知会被开播那 30 分钟冷却静默吃掉，表现为「下播提示时有时无」。
+
+因此下播使用独立的 `offline_gate`（冷却为 0），并由以下机制防止刷屏：
+
+1. 只在 `live → offline` 跳变时触发（持续离线不重复）
+2. `offline_message.grace_seconds` 离线宽限期（默认 60 秒）
+3. `live_status == 2`（轮播）直接不触发
+
+**下播消息的发送参数**与开播通知不同：
+
+| 参数 | 取值 |
+|---|---|
+| `template` | `offline_message.template` |
+| 额外占位符 | `{duration}` = 本次直播时长 |
+| `at_all` | `offline_message.at_all`（**默认 false**） |
+
+> 下播默认不 @ 任何人：没在看直播的人不会关心你几点停播。
+> 若为 true，则覆盖所有群的 `at_all` 设置，统一 @全体成员。
 
 ---
 
@@ -339,7 +412,14 @@ set "QQPath=%~dp0..\qq-napcat\QQ.exe"
   "message": {
     "template": "🔴 开播了！\n\n{title}\n{link}\n\n大家快来捧场～",
     "title": "今晚直播",
-    "link": "https://live.bilibili.com/..."
+    "link": "https://live.bilibili.com/..."   // 房间号也从这里自动识别
+  },
+
+  "offline_message": {                       // 下播提示
+    "enabled": true,
+    "template": "🌙 下播啦，今晚播了 {duration}\n\n谢谢大家陪播～",
+    "at_all": false,                         // 默认不 @，见 §5.4
+    "grace_seconds": 60                      // 离线确认宽限，防空断流误报
   },
 
   "behavior": {
@@ -349,9 +429,13 @@ set "QQPath=%~dp0..\qq-napcat\QQ.exe"
   },
 
   "trigger": {
-    "on_process_start": false,              // 默认关闭，见 §1
+    "on_platform_live": true,               // 直播间状态轮询（首选）
     "on_obs_stream": true,
-    "hotkey": "ctrl+alt+k"                  // 留空则禁用热键
+    "on_process_start": false,              // 默认关闭，见 §1
+    "hotkey": "ctrl+alt+k",                 // 留空则禁用热键
+    "room_id": null,                        // null = 从 message.link 自动识别
+    "poll_seconds": 30,                     // 5 ~ 3600
+    "platform_proxy": ""                    // 留空 = 直连，见 §11.3 T17
   },
 
   "control": {
@@ -515,6 +599,9 @@ NapCat 通过 `CREATE_NO_WINDOW` 启动（配合无 `pause` 的 `launcher-hidden
 | T2 | B站直播姬真实进程名是 `livehime.exe` | 配成 `blivehime.exe` 时子串匹配永远失败 | 名单补全两种写法 |
 | T3 | NapCat 群成员缓存竞态 | 刚登录时角色误判为 `member` | `resolve_role()` 全量复核 |
 | T4 | `ctrl+alt+l` 在本机已被占用 | 热键静默失效 | 注册失败显式告警 + 实测空闲值 `ctrl+alt+k` |
+| T5 | 启动时直播间已在直播 | 若补发，则每重启一次程序群友多收一条 | 初始状态只记录不触发 |
+| T6 | 断流重连导致状态短暂变 0 | 误报「下播了」再「开播了」 | 离线宽限期（默认 60 秒）内恢复则取消 |
+| T7 | 轮播（`live_status == 2`） | 被误判为「播完了」 | 归为离线但不触发下播通知 |
 
 ### 11.2 进程与系统集成
 

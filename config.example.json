@@ -30,15 +30,25 @@
     "title": "今晚直播",
     "link": "https://live.bilibili.com/YOUR_ROOM_ID"
   },
+  "offline_message": {
+    "enabled": true,
+    "template": "🌙 下播啦，今晚播了 {duration}\n\n谢谢大家陪播～",
+    "at_all": false,
+    "grace_seconds": 60
+  },
   "behavior": {
     "cooldown_minutes": 30,
     "send_interval_seconds": 3,
     "dry_run": false
   },
   "trigger": {
-    "on_process_start": false,
+    "on_platform_live": true,
     "on_obs_stream": true,
-    "hotkey": "ctrl+alt+k"
+    "on_process_start": false,
+    "hotkey": "ctrl+alt+k",
+    "room_id": null,
+    "poll_seconds": 30,
+    "platform_proxy": ""
   },
   "control": {
     "enabled": true,
