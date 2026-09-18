@@ -85,67 +85,64 @@ def pick_log_font():
     return FONT
 
 # --------------------------------------------------------------------------
-#  配色 —— 参考 Flyme：素雅、从自然取色、圆角温和、**设计不喧宾夺主**
+#  配色 —— 用 Apple 的系统语义色
 # --------------------------------------------------------------------------
-#  这是第三版配色了，前两版的毛病是一样的：**拿背景和按钮抢戏**。
-#  第一版冷蓝灰像工程软件，第二版换成一整块高饱和紫渐变 + 一个 92px 的
-#  巨大按钮，更吵。Flyme 的设计页把话说得很直白：
+#  之前几版的毛病是「拿背景和按钮抢戏」：冷蓝灰的工程软件味，或者一整块
+#  高饱和紫渐变加一个 92px 的巨大按钮。参考 Apple Music 之后落到三条：
 #
-#      「突显内容 —— 精妙的设计不应喧宾夺主」
-#      「恰到好处的圆角 —— 少了些许锋锐，多了一丝温和」
+#    1. 大面积是**系统灰**（systemGroupedBackground），不带任何色相
+#    2. 主色只出现在真正要引导视线的地方，而且用 systemBlue 这个系统本色，
+#       不自己调一个"更有设计感"的蓝
+#    3. 层次靠 systemBackground 的**亮度差**表达：窗口底 → 卡片 → 浮层，
+#       越靠上的层越亮。深色模式就照 Apple 的做法：底是纯黑，卡片 #1C1C1E
 #
-#  所以这一版落到三条：
-#    1. 大面积底色是**中性**灰白，不带明显色相
-#    2. 主色只出现在真正要引导视线的地方（一个动作按钮、一个选中态），
-#       不铺满界面
-#    3. 分层靠发丝级描边和留白，不靠粗边框和重阴影
-#
-#  深色模式参考 Flyme「夜间模式 2.0」：深邃但不纯黑，而且**越靠上的层越亮**
-#  （BG 最暗 → 卡片略亮）。纯黑配纯白对比过强，看久了累。
+#  语义色一律用 Apple 原值（systemBlue / Green / Orange / Red），
+#  深色模式用它们的 dark 变体 —— 这也是 Apple 自己的规矩：
+#  同一个语义色在深浅两套里是两个不同的值，不是一个值加透明度。
 # --------------------------------------------------------------------------
 
 THEMES = {
     "light": {
-        "BG":        "#F5F6F8",   # 窗口底：中性浅灰
-        "CARD":      "#FFFFFF",
-        "SUNKEN":    "#FAFAFC",   # 比卡片暗一档：表头、次级条
-        "BORDER":    "#E8E9ED",
-        "TEXT":      "#17181C",
-        "MUTED":     "#8A8D96",
-        "PRIMARY":   "#3D7BF7",   # Flyme 蓝
-        "PRIMARY_D": "#2F66D8",
-        "PRIMARY_S": "#EBF2FE",   # 主色的浅底：选中行、悬停
-        "ACCENT":    "#F5A623",
-        "OK":        "#22A06B",
-        "WARN":      "#C77A10",
-        "BAD":       "#E5484D",
-        "OK_S":      "#E9F6F0",
-        "WARN_S":    "#FDF3E3",
-        "BAD_S":     "#FDECEC",
-        "LOG_BG":    "#1B1D22",
-        "LOG_FG":    "#D7DAE3",
-        "LOG_BAR":   "#3A3E48",
+        "BG":        "#F2F2F7",   # systemGroupedBackground
+        "CARD":      "#FFFFFF",   # systemBackground
+        "SUNKEN":    "#F2F2F7",
+        "BORDER":    "#D8D8DC",   # separator
+        "TEXT":      "#000000",   # label
+        "MUTED":     "#8A8A8E",   # secondaryLabel
+        "PRIMARY":   "#007AFF",   # systemBlue
+        "PRIMARY_D": "#0063D1",
+        "PRIMARY_S": "#E5F0FF",
+        "ACCENT":    "#FF9500",   # systemOrange
+        "OK":        "#34C759",   # systemGreen
+        "WARN":      "#C86A00",   # systemOrange，但压暗到能在白底上读
+        "BAD":       "#FF3B30",   # systemRed
+        "OK_S":      "#E7F8EB",
+        "WARN_S":    "#FFF2E0",
+        "BAD_S":     "#FFEAE9",
+        "LOG_BG":    "#1C1C1E",
+        "LOG_FG":    "#E5E5EA",
+        "LOG_BAR":   "#3A3A3C",
     },
     "dark": {
-        "BG":        "#111216",   # 深邃，不是纯黑
-        "CARD":      "#1A1C21",
-        "SUNKEN":    "#15161A",
-        "BORDER":    "#2A2D35",
-        "TEXT":      "#E9EAEE",
-        "MUTED":     "#8B8E99",
-        "PRIMARY":   "#5B8DF5",   # 夜间把主色提亮，否则在深底上发闷
-        "PRIMARY_D": "#4A7BE0",
-        "PRIMARY_S": "#1E2739",
-        "ACCENT":    "#F0A93B",
-        "OK":        "#3DCB8F",
-        "WARN":      "#E0A345",
-        "BAD":       "#F06A6F",
-        "OK_S":      "#16281F",
-        "WARN_S":    "#2A2115",
-        "BAD_S":     "#2C1A1C",
-        "LOG_BG":    "#0C0D10",
-        "LOG_FG":    "#C9CDD8",
-        "LOG_BAR":   "#2E323B",
+        "BG":        "#000000",   # Apple 深色的底就是纯黑
+        "CARD":      "#1C1C1E",   # secondarySystemBackground，比底亮一层
+        "SUNKEN":    "#1C1C1E",
+        "BORDER":    "#38383A",   # separator (dark)
+        "TEXT":      "#FFFFFF",
+        "MUTED":     "#8E8E93",   # secondaryLabel (dark)
+        "PRIMARY":   "#0A84FF",   # systemBlue (dark)
+        "PRIMARY_D": "#0A6FD6",
+        "PRIMARY_S": "#0A2540",
+        "ACCENT":    "#FF9F0A",   # systemOrange (dark)
+        "OK":        "#30D158",   # systemGreen (dark)
+        "WARN":      "#FF9F0A",
+        "BAD":       "#FF453A",   # systemRed (dark)
+        "OK_S":      "#0E2A18",
+        "WARN_S":    "#2A1F0A",
+        "BAD_S":     "#2A1210",
+        "LOG_BG":    "#1C1C1E",
+        "LOG_FG":    "#D1D1D6",
+        "LOG_BAR":   "#2C2C2E",
     },
 }
 
@@ -202,7 +199,7 @@ STATE_RUNNING = "running"
 #  界面小工具
 # --------------------------------------------------------------------------
 
-def make_card(parent, title=None, padx=15, pady=13):
+def make_card(parent, title=None, padx=16, pady=16):
     """白底卡片：外面套一圈 1px 细边。返回 (外层容器, 内层内容区)。"""
     outer = tk.Frame(parent, background=BORDER)
     inner = tk.Frame(outer, background=CARD, padx=padx, pady=pady)
@@ -361,9 +358,11 @@ class RoundedButton(tk.Canvas):
 
     def __init__(self, parent, text, command, font_spec, height=88,
                  radius=20, fill=PRIMARY, fill_active=PRIMARY_D,
-                 background=BG):
+                 background=BG, width=None):
         super().__init__(parent, height=height, background=background,
                          highlightthickness=0, bd=0, cursor="hand2")
+        if width:
+            tk.Canvas.config(self, width=width)
         self._text = text
         self._command = command
         self._font = font_spec
@@ -594,26 +593,36 @@ def wait_for_port(port, seconds, should_cancel=None):
 
 class App:
     @staticmethod
-    def _peek_theme():
-        """建界面**之前**先单独读一次主题偏好。
+    def _peek_ui():
+        """建界面**之前**单独读一次界面偏好（主题、窗口位置）。
 
         配置本来要等 _build_ui 之后才读（界面才是它的消费者），但控件颜色
-        是创建时写死的 —— 晚一步就得整个重建一次，启动时会明显闪一下。
-        读不到或读坏了都退回浅色，不能因为一个偏好设置让程序起不来。
+        和窗口尺寸都得在**创建时**定下来 —— 晚一步就得整个重建/挪动一次，
+        启动时会明显闪一下。读不到或读坏了都退回默认值。
         """
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8-sig") as fh:
-                return (json.load(fh).get("ui") or {}).get("theme") or "light"
+                return json.load(fh).get("ui") or {}
         except Exception:
-            return "light"
+            return {}
 
     def __init__(self, root):
         self.root = root
         self.root.title("大肥鱼直播姬")
-        self.root.geometry("980x760")
-        self.root.minsize(900, 660)
 
-        apply_theme(self._peek_theme())
+        ui = self._peek_ui()
+        apply_theme(ui.get("theme") or "light")
+
+        # 窗口尺寸：没存过就按屏幕大小挑一个合适的初值。
+        # 硬编码 980x760 在 1366x768 的笔记本上会顶到任务栏。
+        geo = str(ui.get("geometry") or "")
+        if re.match(r"^\d+x\d+\d*[+-]\d+[+-]\d+$", geo):
+            self.root.geometry(geo)
+        else:
+            sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+            self.root.geometry("{}x{}".format(min(980, sw - 80),
+                                              min(760, sh - 120)))
+        self.root.minsize(880, 620)
         self.root.configure(background=BG)
         set_window_icon(self.root)
 
@@ -708,8 +717,11 @@ class App:
         style.configure("TNotebook", background=BG, borderwidth=0,
                         tabmargins=(8, 8, 8, 0),
                         bordercolor=BG, lightcolor=BG, darkcolor=BG)
-        style.configure("TNotebook.Tab", background=SUNKEN, foreground=MUTED,
-                        padding=(22, 11), borderwidth=0, font=(FONT, 10))
+        # Tab 也要显式关掉 clam 的立体描边 —— 只设 TNotebook 不够，
+        # 那个浅色边框是画在 tab 自己身上的，深色主题下会露出来。
+        style.configure("TNotebook.Tab", background=BG, foreground=MUTED,
+                        padding=(24, 12), borderwidth=0, font=(FONT, 10),
+                        bordercolor=BG, lightcolor=BG, darkcolor=BG)
         style.map("TNotebook.Tab",
                   background=[("selected", CARD), ("active", PRIMARY_S)],
                   foreground=[("selected", PRIMARY)])
@@ -784,10 +796,10 @@ class App:
         self._head_job = None
         self.head.bind("<Configure>", self._head_resized)
 
-        self.head.create_text(26, 32, anchor="w", text="大肥鱼直播姬",
-                              fill=TEXT, font=(FONT, 18, "bold"))
+        self.head.create_text(26, 34, anchor="w", text="大肥鱼直播姬",
+                              fill=TEXT, font=(FONT, 23, "bold"))
         # 标题下面一小段琥珀色，是整块头部唯一的彩色
-        self.head.create_line(27, 55, 62, 55, fill=ACCENT, width=3,
+        self.head.create_line(27, 62, 62, 62, fill=ACCENT, width=3,
                               capstyle="round")
         self.lbl_state = CanvasLabel(self.head, self.head.create_text(
             0, 62, anchor="e", text="", fill=MUTED, font=(FONT, 10)))
@@ -816,36 +828,44 @@ class App:
         self.btn_theme.bind("<Leave>",
                             lambda e: self.btn_theme.config(foreground=MUTED))
 
-        # ---------------- 主操作区 ----------------
-        # 注意：tk.Frame 的 padx/pady 只收整数，元组是 pack/grid 才认的
-        main = tk.Frame(self.root, background=BG)
-        main.pack(fill="x", padx=26, pady=(20, 14))
+        # ---------------- 底部常驻操作栏 ----------------
+        # 整个界面最「Apple Music」的一处：主操作不放顶部那个巨大的色块里，
+        # 而是收进一条**常驻底栏** —— 左边是当前状态，右边是唯一的主按钮。
+        # 两个好处：按钮不再抢戏（Apple Music 从不用大按钮），而且切到任何
+        # 标签页它都还在那儿，不用滚回去找。
+        #
+        # pack 顺序有意为之：先占住底边，中间那块再用 expand 填满剩下的空间。
+        bar = tk.Frame(self.root, background=CARD)
+        bar.pack(side="bottom", fill="x")
+        tk.Frame(bar, background=BORDER, height=1).pack(fill="x")   # 发丝分隔线
 
-        # 高度从 92 收到 58。原来那个又高又饱和的大色块是界面里最吵的东西，
-        # 而它承载的信息只有一个动作 —— 尺寸该由内容决定，不是由"要显眼"决定。
-        self.btn_main = RoundedButton(
-            main, text="开始直播通知", command=self.toggle_main,
-            font_spec=(FONT, 15, "bold"), height=58, radius=14,
-            fill=PRIMARY, fill_active=PRIMARY_D, background=BG)
-        self.btn_main.pack(fill="x")
+        inner = tk.Frame(bar, background=CARD)
+        inner.pack(fill="x", padx=24, pady=16)
 
-        # 提示条
+        left = tk.Frame(inner, background=CARD)
+        left.pack(side="left", fill="both", expand=True)
+
         self.lbl_hotkey_hint = tk.Label(
-            main, justify="center", font=(FONT, 10, "bold"),
-            background=OK_S, foreground=OK_COLOR,
-            padx=12, pady=9, wraplength=840, bd=0)
-        self.lbl_hotkey_hint.pack(fill="x", pady=(12, 0))
+            left, justify="left", anchor="w", font=(FONT, 11, "bold"),
+            background=CARD, foreground=OK_COLOR, bd=0, wraplength=600)
+        self.lbl_hotkey_hint.pack(anchor="w")
 
         self.lbl_tip = tk.Label(
-            main, justify="center", font=(FONT, 9), background=BG,
-            foreground=MUTED,
-            text="点一下就开始，之后可以一直挂着。"
+            left, justify="left", anchor="w", font=(FONT, 9), background=CARD,
+            foreground=MUTED, wraplength=600,
+            text="点一下就开始，之后一直挂着就行。"
                  "程序跑在独立的 QQ 副本上，你自己聊天的 QQ 不受影响。")
-        self.lbl_tip.pack(pady=(9, 0))
+        self.lbl_tip.pack(anchor="w", pady=(3, 0))
+
+        self.btn_main = RoundedButton(
+            inner, text="开始直播通知", command=self.toggle_main,
+            font_spec=(FONT, 14, "bold"), height=48, radius=12, width=200,
+            fill=PRIMARY, fill_active=PRIMARY_D, background=CARD)
+        self.btn_main.pack(side="right", padx=(24, 0))
 
         # ---------------- 标签页 ----------------
         nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True, padx=14, pady=(2, 12))
+        nb.pack(fill="both", expand=True, padx=16, pady=(8, 8))
         self.notebook = nb
 
         self.tab_log = tk.Frame(nb, background=BG)
@@ -863,7 +883,7 @@ class App:
         self._build_message_tab()
 
     def _build_log_tab(self):
-        page = tk.Frame(self.tab_log, background=BG, padx=12, pady=12)
+        page = tk.Frame(self.tab_log, background=BG, padx=16, pady=16)
         page.pack(fill="both", expand=True)
 
         bar = tk.Frame(page, background=BG)
@@ -873,7 +893,11 @@ class App:
         ttk.Button(bar, text="清空", width=8,
                    command=self.clear_log).pack(side="right")
         ttk.Button(bar, text="打开日志文件夹", width=15,
-                   command=self.open_log_dir).pack(side="right", padx=(0, 6))
+                   command=self.open_log_dir).pack(side="right", padx=(0, 8))
+
+        # 「上次通知」卡片先占住底边，日志框再 expand 填中间 —— 顺序不能反。
+        # 之前日志框独占整页，内容才两行却撑满一屏，空旷得很难看。
+        self._build_last_send_card(page)
 
         outer = tk.Frame(page, background=BORDER)
         outer.pack(fill="both", expand=True)
@@ -890,6 +914,62 @@ class App:
         self.sb_log.config(command=self.txt_log.yview)
         self.sb_log.pack(side="right", fill="y", padx=(0, 1), pady=1)
         self.txt_log.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
+
+    def _build_last_send_card(self, parent):
+        """「上次通知」卡片 —— 摆在日志框下面，占住底边。
+
+        这块地方原来是空的（日志框独占整页撑满一屏）。拿来放这个，是因为
+        「通知到底发出去没有」恰恰是最该一眼看到、而原来只能去日志里翻的事。
+        """
+        outer, card = make_card(parent)
+        outer.pack(side="bottom", fill="x", pady=(12, 0))
+
+        head = tk.Frame(card, background=CARD)
+        head.pack(fill="x")
+        tk.Label(head, text="上次通知", background=CARD, foreground=MUTED,
+                 font=(FONT, 9)).pack(side="left")
+        self.lbl_last_when = tk.Label(head, text="", background=CARD,
+                                      foreground=MUTED, font=(FONT, 9))
+        self.lbl_last_when.pack(side="right")
+
+        self.lbl_last_send = tk.Label(
+            card, text="", background=CARD, foreground=MUTED,
+            font=(FONT, 11, "bold"), anchor="w", justify="left",
+            wraplength=740)
+        self.lbl_last_send.pack(fill="x", pady=(6, 0))
+
+    def _refresh_last_send(self):
+        """把 core.LAST_SEND 摊到界面上。
+
+        和日志的区别：日志是流水，这里只回答一个问题 —— **上一次通知，
+        群里到底收到没有**。发失败的时候这一行是红的，扫一眼就知道。
+        """
+        if not hasattr(self, "lbl_last_send"):
+            return
+        info = getattr(core, "LAST_SEND", None) or {}
+        when = str(info.get("when") or "")
+        total = int(info.get("total") or 0)
+        if not when or not total:
+            self.lbl_last_when.config(text="")
+            self.lbl_last_send.config(
+                text="这次开着界面之后还没发过通知。", foreground=MUTED)
+            return
+
+        ok = int(info.get("ok") or 0)
+        failed = list(info.get("failed") or [])
+        what = str(info.get("reason") or "通知")
+        self.lbl_last_when.config(text="{}　{}".format(when, what))
+        if failed:
+            self.lbl_last_send.config(
+                text="⚠ 成功 {}/{}，有 {} 个群最终没发出去".format(
+                    ok, total, len(failed)),
+                foreground=BAD_COLOR)
+        elif ok == total:
+            self.lbl_last_send.config(text="已发送 {}/{}　全部成功".format(ok, total),
+                                      foreground=OK_COLOR)
+        else:
+            self.lbl_last_send.config(text="已发送 {}/{}".format(ok, total),
+                                      foreground=WARN)
 
     def _build_groups_tab(self):
         self.sf_groups = ScrollFrame(self.tab_groups)
@@ -1948,6 +2028,7 @@ class App:
             self.lbl_obs.config(text="OBS 状态：—", foreground=MUTED)
             self.lbl_platform.config(text="直播间状态：—", foreground=MUTED)
 
+        self._refresh_last_send()
         self.root.after(4000, self._poll_trigger)
 
     def _refresh_hotkey_hint(self):
@@ -1974,15 +2055,14 @@ class App:
                 " + ".join(what))
             if hk and hk_on:
                 text += "\n快捷键 {} 是备用：想随时手动推一次就按它".format(hk.upper())
-            self.lbl_hotkey_hint.config(background=OK_S, foreground=OK_COLOR,
-                                        text=text)
+            self.lbl_hotkey_hint.config(foreground=OK_COLOR, text=text)
         elif hk and hk_on:
             self.lbl_hotkey_hint.config(
-                background=WARN_S, foreground=WARN,
+                foreground=WARN,
                 text="⚠ 没开自动检测 —— 开播时记得按一下  {}  ".format(hk.upper()))
         else:
             self.lbl_hotkey_hint.config(
-                background=BAD_S, foreground=BAD_COLOR,
+                foreground=BAD_COLOR,
                 text="⚠ 自动检测和快捷键都没开 —— 开播时不会通知任何人")
 
     def capture_hotkey(self):
@@ -2239,8 +2319,32 @@ class App:
                     self.stop_event.set()
                 core.log("退出中，正在关闭 NapCat …")
                 stop_napcat()
+        self._save_geometry()
         core.remove_log_sink(self.log_queue.put)
         self.root.destroy()
+
+    def _save_geometry(self):
+        """把窗口大小和位置记进配置。
+
+        Windows 上的常规期待：下次打开还在原来的地方、还是原来那么大。
+        窗口最大化时不存尺寸 —— 存了的话下次会以最大化尺寸开出来，
+        而且再也缩不回去（用户是按最大化按钮，不是把窗口拉那么大）。
+        """
+        if self.cfg is None:
+            return
+        try:
+            if self.root.state() != "normal":
+                return
+            geo = self.root.geometry()          # 形如 980x760+120+80
+            if "x" not in geo or "+" not in geo:
+                return
+            ui = self.cfg.setdefault("ui", {})
+            if ui.get("geometry") == geo:
+                return
+            ui["geometry"] = geo
+            self._write_config()
+        except Exception:
+            pass        # 存不下就算了，不能因为这个拦住退出
 
 
 def main():

@@ -232,6 +232,79 @@ def run_games_tests():
     return failures
 
 
+def run_send_retry_tests(path):
+    """群发失败要自动重试，而且**成功过的群不能重发**。
+
+    后者才是真正容易写错的地方：NapCat 掉线往往是「部分群发出去、部分没发出去」，
+    如果重试时不区分，群友会连着收到两三条一样的通知。
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    base = live_notify.load_config(path)
+    base["behavior"]["dry_run"] = False
+    base["behavior"]["send_interval_seconds"] = 0
+    base["groups"] = [
+        {"group_id": 1, "enabled": True, "at_all": False, "at_list": [], "note": "甲"},
+        {"group_id": 2, "enabled": True, "at_all": False, "at_list": [], "note": "乙"},
+    ]
+
+    class FakeBot:
+        """send_group_msg 按次数失败，用来模拟 NapCat 掉线又恢复。"""
+
+        def __init__(self, fail_times):
+            self.fail_times = dict(fail_times)
+            self.calls = []
+
+        def send_group_msg(self, gid, segments):
+            self.calls.append(gid)
+            if self.fail_times.get(gid, 0) > 0:
+                self.fail_times[gid] -= 1
+                return False, "模拟：连不上 NapCat"
+            return True, {"message_id": 1}
+
+    old_delays = live_notify.SEND_RETRY_DELAYS
+    live_notify.SEND_RETRY_DELAYS = (0, 0, 0)       # 测试里不真等
+    try:
+        # ---- 用例 A：掉线一轮就恢复 ----
+        bot = FakeBot({1: 1, 2: 1})
+        ok = live_notify.send_to_groups(base, bot, "测试")
+        check("掉线一轮后重试成功", ok == 2, "ok={}".format(ok))
+        check("每个群恰好两次调用（失败 + 补发）",
+              sorted(bot.calls) == [1, 1, 2, 2], repr(bot.calls))
+        check("全部成功后 failed 为空",
+              live_notify.LAST_SEND["failed"] == [], repr(live_notify.LAST_SEND))
+
+        # ---- 用例 B：甲群一直失败，乙群一次成功 ----
+        bot = FakeBot({1: 99})
+        ok = live_notify.send_to_groups(base, bot, "测试")
+        check("部分失败时成功数正确", ok == 1, "ok={}".format(ok))
+        check("成功的群**没有**被重发", bot.calls.count(2) == 1, repr(bot.calls))
+        check("一直失败的群试满了所有轮次",
+              bot.calls.count(1) == len(live_notify.SEND_RETRY_DELAYS) + 1,
+              repr(bot.calls))
+        check("彻底失败的群记进 LAST_SEND",
+              live_notify.LAST_SEND["failed"] == [1], repr(live_notify.LAST_SEND))
+        check("LAST_SEND 的总数是启用群数",
+              live_notify.LAST_SEND["total"] == 2, repr(live_notify.LAST_SEND))
+
+        # ---- 用例 C：一个启用的群都没有 ----
+        empty = live_notify.load_config(path)
+        empty["behavior"]["dry_run"] = False
+        empty["groups"] = []
+        ok = live_notify.send_to_groups(empty, FakeBot({}), "测试")
+        check("没有启用的群时返回 0 且不炸", ok == 0, "ok={}".format(ok))
+    finally:
+        live_notify.SEND_RETRY_DELAYS = old_delays
+
+    return failures
+
+
 def main():
     live_notify._setup_console()          # 先切 UTF-8，否则中文输出会乱码
     path = make_config()
@@ -260,9 +333,14 @@ def main():
     failures = run_engine_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 5/5  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("# 5/6  游戏识别（纯逻辑，不要求有游戏在跑）")
     print("#" * 70)
     failures += run_games_tests()
+
+    print("\n" + "#" * 70)
+    print("# 6/6  群发失败重试")
+    print("#" * 70)
+    failures += run_send_retry_tests(path)
 
     print("\n" + "=" * 70)
     print("命令退出码：check={check}  test={test}  send={send}".format(**results))

@@ -50,7 +50,7 @@ except ImportError:                # 缺文件时通知里就不带游戏名
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 def _resolve_base_dir():
     """确定**数据目录**（config.json / logs / napcat 所在处）。
@@ -769,6 +769,21 @@ def describe_message(group, segments):
 # 发送
 # --------------------------------------------------------------------------
 
+# 群发失败后的重试间隔（秒）。
+#
+# 为什么需要：NapCat 偶尔会掉线，健康检查通常十几秒就把它拉回来了 —— 但
+# **已经失败的那条通知不会重发**。实测踩到过一次：开播通知三条全军覆没，
+# 日志里只留了一行「完成：成功 0/3」，群里什么都没收到，界面也不吭声。
+# 那正好是这个工具最不能出错的一刻。
+#
+# 5 / 15 / 45 是照着「NapCat 重启要几秒到几十秒」定的：第一轮 5 秒正好落在
+# 健康检查（8 秒一轮）之后不久，多数掉线一次就能补上。
+SEND_RETRY_DELAYS = (5, 15, 45)
+
+# 最近一次群发的结果，给界面用来弹提示 —— 重试用尽还有剩的，才值得打扰用户。
+LAST_SEND = {"ok": 0, "total": 0, "failed": [], "when": "", "reason": ""}
+
+
 def send_to_groups(cfg, onebot, reason, force_dry=False,
                    template=None, extra_fields=None, at_all=None, image=""):
     """向所有启用的群发送通知。返回成功数。
@@ -780,49 +795,93 @@ def send_to_groups(cfg, onebot, reason, force_dry=False,
       · extra_fields —— 补充额外占位符（{game} / {duration} / {peak}）
       · at_all       —— 覆盖各群自己的 @ 设置；None 表示沿用群配置
       · image        —— 图片地址，非空时附在文字后面
+
+    发失败的群会按 SEND_RETRY_DELAYS 重试，**发成功的不重发** —— 否则群友
+    会连着收到好几条一样的。全都试完还是不行的，记进 LAST_SEND["failed"]。
     """
     dry = cfg["behavior"]["dry_run"] or force_dry
     text = render_text(cfg, template=template, extra=extra_fields)
     active = [g for g in cfg["groups"] if g["enabled"]]
     if not active:
         log("没有任何启用的群（enabled 全是 false），什么都没发。", "WARN")
+        LAST_SEND.update(ok=0, total=0, failed=[], when="", reason=reason)
         return 0
 
     log("触发原因：{}".format(reason))
     log("目标：{} 个启用的群（配置里共 {} 个）{}".format(
         len(active), len(cfg["groups"]), "  —— 彩排模式，不真的发" if dry else ""))
 
-    ok_count = 0
-    for idx, group in enumerate(active):
-        target = group
-        if at_all is not None:
-            # 覆盖 @ 行为：下播提示默认谁都不 @
-            target = dict(group, at_all=bool(at_all),
-                          at_list=[] if at_all else [])
-        segments = build_message(target, text, image=image)
-        preview = describe_message(target, segments)
-        label = "{}{}".format(group["group_id"],
-                              "（{}）".format(group["note"]) if group["note"] else "")
+    gap = cfg["behavior"]["send_interval_seconds"]
 
-        if dry:
+    if dry:
+        for group in active:
+            target = group
+            if at_all is not None:
+                target = dict(group, at_all=bool(at_all),
+                              at_list=[] if at_all else [])
+            preview = describe_message(target, build_message(target, text,
+                                                             image=image))
+            label = "{}{}".format(group["group_id"],
+                                  "（{}）".format(group["note"]) if group["note"] else "")
             log("  [彩排] {} → {}".format(label, preview.replace("\n", " / ")))
-            ok_count += 1
-            continue
+        log("完成：成功 {}/{}".format(len(active), len(active)))
+        LAST_SEND.update(ok=len(active), total=len(active), failed=[],
+                         when=datetime.now().strftime("%H:%M:%S"),
+                         reason=reason)
+        return len(active)
 
-        ok, data = onebot.send_group_msg(group["group_id"], segments)
-        if ok:
-            mid = ""
-            if isinstance(data, dict) and data.get("message_id") is not None:
-                mid = " (message_id={})".format(data["message_id"])
-            log("  [成功] {} -> 已发送{}".format(label, mid))
-            ok_count += 1
-        else:
-            log("  [失败] {} -> 发送失败\n     {}".format(label, data), "ERROR")
+    ok_count = 0
+    pending = list(active)          # 还没发成功的群
+    rounds = len(SEND_RETRY_DELAYS) + 1
 
-        if idx < len(active) - 1 and cfg["behavior"]["send_interval_seconds"] > 0:
-            time.sleep(cfg["behavior"]["send_interval_seconds"])
+    for attempt in range(rounds):
+        if attempt:
+            delay = SEND_RETRY_DELAYS[attempt - 1]
+            log("还有 {} 个群没发出去，{} 秒后重试（第 {}/{} 轮）…".format(
+                len(pending), delay, attempt, rounds - 1), "WARN")
+            time.sleep(delay)
 
-    log("完成：成功 {}/{}".format(ok_count, len(active)))
+        still = []
+        for idx, group in enumerate(pending):
+            target = group
+            if at_all is not None:
+                # 覆盖 @ 行为：下播提示默认谁都不 @
+                target = dict(group, at_all=bool(at_all),
+                              at_list=[] if at_all else [])
+            segments = build_message(target, text, image=image)
+            label = "{}{}".format(group["group_id"],
+                                  "（{}）".format(group["note"]) if group["note"] else "")
+
+            ok, data = onebot.send_group_msg(group["group_id"], segments)
+            if ok:
+                mid = ""
+                if isinstance(data, dict) and data.get("message_id") is not None:
+                    mid = " (message_id={})".format(data["message_id"])
+                log("  [成功] {} -> 已发送{}{}".format(
+                    label, mid, "（第 {} 轮补发）".format(attempt) if attempt else ""))
+                ok_count += 1
+            else:
+                still.append(group)
+                if attempt == 0:
+                    log("  [失败] {} -> {}\n     会在稍后自动重试".format(label, data),
+                        "WARN")
+                elif attempt == rounds - 1:
+                    log("  [失败] {} -> 重试 {} 次仍然发不出去".format(
+                        label, len(SEND_RETRY_DELAYS)), "ERROR")
+
+            if idx < len(pending) - 1 and gap > 0:
+                time.sleep(gap)
+
+        pending = still
+        if not pending:
+            break
+
+    LAST_SEND.update(ok=ok_count, total=len(active),
+                     failed=[g["group_id"] for g in pending],
+                     when=datetime.now().strftime("%H:%M:%S"),
+                     reason=reason)
+    log("完成：成功 {}/{}".format(ok_count, len(active)),
+        "WARN" if pending else "INFO")
     return ok_count
 
 
