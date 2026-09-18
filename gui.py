@@ -1308,9 +1308,12 @@ class App:
             self.root.geometry(geo)
         else:
             sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
-            self.root.geometry("{}x{}".format(min(860, sw - 80),
-                                              min(720, sh - 120)))
-        self.root.minsize(780, 580)
+            # 默认 780x915 —— 比原来窄而高。窄是因为窗口铺太开时每行字都拉得
+            # 很长，反而不好读；高是因为下面那张日志面板需要纵向空间。
+            # 仍然跟屏幕尺寸取 min：小屏笔记本上要能缩得下。
+            self.root.geometry("{}x{}".format(min(780, sw - 80),
+                                              min(915, sh - 120)))
+        self.root.minsize(740, 560)
         self.root.configure(background=BG)
         set_window_icon(self.root)
 
