@@ -220,8 +220,14 @@ python live_notify.py groups    # 列出机器人所在的所有群
 ```bash
 pip install pyinstaller
 python -m PyInstaller --onefile --windowed --icon _build/app.ico \
+       --add-data "_build/app.ico;." \
        --name "大肥鱼直播姬" gui.py
 ```
+
+`--icon` 只负责 **exe 文件本身**的图标；tkinter 的窗口标题栏和任务栏默认用的是
+Tk 自带的羽毛，跟 exe 图标是两回事。所以还要用 `--add-data` 把 ico 一起塞进包里，
+`set_window_icon()` 才能在运行时通过 `sys._MEIPASS` 找到它并 `iconbitmap(default=...)`。
+少了 `--add-data`，exe 图标是对的，窗口左上角却还是羽毛。
 
 图标是一张自绘插画，用 `_build/_makeicon.ps1` 转成 7 个尺寸的 ICO：
 GDI+ `HighQualityBicubic` 缩放 + 圆角裁切，不依赖 Pillow（用的是 Windows 自带的 GDI+）。

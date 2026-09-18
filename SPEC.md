@@ -688,10 +688,15 @@ NapCat 通过 `CREATE_NO_WINDOW` 启动（配合无 `pause` 的 `launcher-hidden
 ```
 pip install pyinstaller
 python -m PyInstaller --onefile --windowed --icon _build/app.ico \
+       --add-data "_build/app.ico;." \
        --name "大肥鱼直播姬" gui.py
 ```
 
 `exe` 内含 Python 运行时，因此**目标机器无需安装 Python**。
+
+`--icon` 管的是 exe 文件自身的图标，**管不到 tkinter 窗口**——Tk 窗口的标题栏和
+任务栏默认永远画自带的羽毛。所以必须再用 `--add-data` 把同一个 ico 打进包里，
+运行时由 `set_window_icon()` 经 `sys._MEIPASS` 取到并 `iconbitmap(default=...)`。
 
 ### 13.3 图标生成
 

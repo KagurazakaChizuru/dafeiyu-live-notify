@@ -29,7 +29,7 @@ from datetime import datetime
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-from tkinter.scrolledtext import ScrolledText
+from tkinter import font as tkfont
 
 def _resolve_data_dir():
     """确定「程序数据目录」（config.json / napcat / qq-napcat / logs 所在处）。
@@ -60,19 +60,160 @@ ERROR_LOG = os.path.join(HERE, "gui-error.log")
 
 MAX_LOG_LINES = 1500
 FONT = "Microsoft YaHei UI"
-OK_COLOR = "#137333"
-BAD_COLOR = "#c5221f"
-MUTED = "#5f6368"
-BLUE = "#1a73e8"
-BLUE_DARK = "#1557b0"
-RED = "#d93025"
-RED_DARK = "#a50e0e"
+
+# 日志用的字体。**绝不能用 Consolas 这类纯西文字体**：Tk 遇到字体里没有的
+# 字形会走系统回退，而回退出来的中文是画在一小块浅色底上的——深色日志框里
+# 会一条条冒白补丁，看起来像乱码。优先中文等宽，没有就退回界面字体。
+LOG_FONT_CANDIDATES = ("Sarasa Mono SC", "Sarasa Mono HC", "NSimSun",
+                       "SimSun", "Microsoft YaHei UI", FONT)
+
+
+def pick_log_font():
+    try:
+        available = set(tkfont.families())
+    except tk.TclError:
+        return FONT
+    for name in LOG_FONT_CANDIDATES:
+        if name in available:
+            return name
+    return FONT
+
+# --------------------------------------------------------------------------
+#  配色 —— 跟图标统一（深蓝 + 亮黄）
+# --------------------------------------------------------------------------
+BG        = "#EDF2FA"      # 窗口底色
+CARD      = "#FFFFFF"      # 卡片底
+BORDER    = "#D6E1F1"      # 卡片描边
+HEAD_BG   = "#2E4E8F"      # 顶部横幅
+TEXT      = "#1B2A41"
+MUTED     = "#6B7C93"
+PRIMARY   = "#2F5FA8"      # 主蓝
+PRIMARY_D = "#254C89"
+ACCENT    = "#F5B301"      # 喇叭黄
+OK_COLOR  = "#1E7A4D"
+WARN      = "#B26A00"
+BAD_COLOR = "#C0392B"
+
+# 兼容旧名字（其它方法里还在用）
+BLUE = PRIMARY
+BLUE_DARK = PRIMARY_D
+RED = "#D64545"
+RED_DARK = "#B53434"
 
 ROLE_CN = {"owner": "群主", "admin": "管理员", "member": "普通成员"}
 
 STATE_IDLE = "idle"
 STATE_WORKING = "working"
 STATE_RUNNING = "running"
+
+
+# --------------------------------------------------------------------------
+#  界面小工具
+# --------------------------------------------------------------------------
+
+def make_card(parent, title=None, padx=15, pady=13):
+    """白底卡片：外面套一圈 1px 细边。返回 (外层容器, 内层内容区)。"""
+    outer = tk.Frame(parent, background=BORDER)
+    inner = tk.Frame(outer, background=CARD, padx=padx, pady=pady)
+    inner.pack(fill="both", expand=True, padx=1, pady=1)
+    if title:
+        tk.Label(inner, text=title, background=CARD, foreground=PRIMARY,
+                 font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 9))
+    return outer, inner
+
+
+def card_hint(parent, text, wraplength=790, indent=0, pady=(5, 0)):
+    """卡片里的灰色说明文字。"""
+    lbl = tk.Label(parent, text=text, background=CARD, foreground=MUTED,
+                   justify="left", anchor="w", wraplength=wraplength,
+                   font=(FONT, 9))
+    lbl.pack(anchor="w", padx=(indent, 0), pady=pady)
+    return lbl
+
+
+class ScrollFrame(tk.Frame):
+    """可以竖向滚动的页面容器。
+
+    设置项天生就比一屏高。窗口只有 760 高，内容再多就会被切掉——
+    而被切掉的部分**没有任何提示**，用户只会觉得「这软件怎么少了几项」。
+    所以每个设置页都套一层这个，内容矮的时候滚动条自动隐形。
+    """
+
+    def __init__(self, parent, background=BG, padx=12, pady=12):
+        super().__init__(parent, background=background)
+        self.canvas = tk.Canvas(self, background=background, bd=0,
+                                highlightthickness=0, takefocus=0)
+        self.vbar = ttk.Scrollbar(self, orient="vertical",
+                                  command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.vbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True)
+
+        self.body = tk.Frame(self.canvas, background=background,
+                             padx=padx, pady=pady)
+        self._win = self.canvas.create_window((0, 0), window=self.body,
+                                              anchor="nw")
+        self.body.bind("<Configure>", self._on_body)
+        self.canvas.bind("<Configure>", self._on_canvas)
+        # 滚轮用 bind_all + 命中判断，而不是 Enter/Leave：
+        # 指针滑到卡片上时父容器会收到 Leave，那种写法滚一半就断。
+        self.canvas.bind_all("<MouseWheel>", self._on_wheel, add="+")
+
+    def _on_body(self, _event=None):
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self._sync_bar()
+
+    def _on_canvas(self, event):
+        # 让内容跟着窗口一起变宽，否则拉大窗口右边会留白
+        self.canvas.itemconfigure(self._win, width=event.width)
+        self._sync_bar()
+
+    def _sync_bar(self):
+        """内容装得下就把滚动条收起来。"""
+        try:
+            need = self.body.winfo_reqheight() > self.canvas.winfo_height()
+        except tk.TclError:
+            return
+        shown = bool(self.vbar.winfo_ismapped())
+        if need and not shown:
+            self.vbar.pack(side="right", fill="y", before=self.canvas)
+        elif not need and shown:
+            self.vbar.pack_forget()
+
+    def _on_wheel(self, event):
+        if self.body.winfo_reqheight() <= self.canvas.winfo_height():
+            return
+        # 只有指针真的停在本页上才滚，否则切到别的标签页也会跟着动
+        node = self.winfo_containing(event.x_root, event.y_root)
+        while node is not None:
+            if node is self:
+                break
+            node = getattr(node, "master", None)
+        else:
+            return
+        self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
+
+
+def set_window_icon(root):
+    """设置标题栏 / 任务栏图标。
+
+    exe 的图标是嵌在可执行文件里的，但 **tkinter 窗口默认用 Tk 自带的羽毛**，
+    不显式设一次，标题栏左上角就还是那个羽毛。
+    打包后图标在解包目录（sys._MEIPASS），开发时在 app/_build/ 下。
+    """
+    candidates = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(os.path.join(meipass, "app.ico"))
+    candidates.append(os.path.join(HERE, "_build", "app.ico"))
+    for path in candidates:
+        if os.path.isfile(path):
+            try:
+                root.iconbitmap(default=path)
+                return path
+            except Exception:
+                continue
+    return None
+
 
 
 # --------------------------------------------------------------------------
@@ -217,8 +358,10 @@ class App:
     def __init__(self, root):
         self.root = root
         self.root.title("大肥鱼直播姬")
-        self.root.geometry("960x730")
-        self.root.minsize(880, 640)
+        self.root.geometry("980x760")
+        self.root.minsize(900, 660)
+        self.root.configure(background=BG)
+        set_window_icon(self.root)
 
         self.cfg = None
         self.state = STATE_IDLE
@@ -254,80 +397,170 @@ class App:
     #  界面
     # ==================================================================
 
-    def _build_ui(self):
+    def _setup_style(self):
+        """全局主题。
+
+        必须用 clam：Windows 默认的 vista 主题**会忽略 background 配置**，
+        颜色一个都设不上去，界面对比度极差。clam 牺牲一点原生感，
+        换来做得到统一的设计。
+        """
         style = ttk.Style()
         try:
-            style.theme_use("vista")
+            style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure("Treeview", rowheight=26, font=(FONT, 9))
-        style.configure("Treeview.Heading", font=(FONT, 9, "bold"))
-        style.configure("TNotebook.Tab", padding=(16, 8), font=(FONT, 10))
 
-        # ---------------- 顶部状态区 ----------------
-        head = tk.Frame(self.root, background="#f5f6f8")
+        style.configure(".", background=BG, foreground=TEXT, font=(FONT, 9))
+        style.configure("TFrame", background=BG)
+        style.configure("Card.TFrame", background=CARD)
+        style.configure("TLabel", background=BG, foreground=TEXT)
+        style.configure("Card.TLabel", background=CARD, foreground=TEXT)
+        style.configure("Muted.TLabel", background=CARD, foreground=MUTED)
+
+        # 按钮
+        style.configure("TButton", background="#DFE8F5", foreground=TEXT,
+                        borderwidth=0, focusthickness=0, padding=(12, 7),
+                        font=(FONT, 9), relief="flat")
+        style.map("TButton",
+                  background=[("pressed", "#C6D6EC"), ("active", "#D2DFF0"),
+                              ("disabled", "#EBEFF5")],
+                  foreground=[("disabled", "#A8B3C2")])
+        style.configure("Primary.TButton", background=PRIMARY, foreground="white",
+                        borderwidth=0, padding=(14, 8), font=(FONT, 9, "bold"),
+                        relief="flat")
+        style.map("Primary.TButton",
+                  background=[("pressed", PRIMARY_D), ("active", PRIMARY_D)])
+
+        # 输入类控件
+        style.configure("TEntry", fieldbackground="white", foreground=TEXT,
+                        bordercolor=BORDER, lightcolor=BORDER, darkcolor=BORDER,
+                        borderwidth=1, padding=5)
+        style.configure("TSpinbox", fieldbackground="white", foreground=TEXT,
+                        bordercolor=BORDER, arrowcolor=PRIMARY, borderwidth=1,
+                        padding=3)
+        style.configure("TCombobox", fieldbackground="white", background="white",
+                        bordercolor=BORDER, arrowcolor=PRIMARY, padding=4)
+
+        # 复选框
+        style.configure("TCheckbutton", background=CARD, foreground=TEXT,
+                        focusthickness=0, font=(FONT, 9))
+        style.map("TCheckbutton", background=[("active", CARD)])
+        style.configure("Bg.TCheckbutton", background=BG)
+        style.map("Bg.TCheckbutton", background=[("active", BG)])
+
+        # 标签页
+        style.configure("TNotebook", background=BG, borderwidth=0,
+                        tabmargins=(6, 6, 6, 0))
+        style.configure("TNotebook.Tab", background="#DAE4F2", foreground=MUTED,
+                        padding=(20, 10), borderwidth=0, font=(FONT, 10))
+        style.map("TNotebook.Tab",
+                  background=[("selected", CARD), ("active", "#E7EEF9")],
+                  foreground=[("selected", PRIMARY)])
+
+        # 表格
+        style.configure("Treeview", background=CARD, fieldbackground=CARD,
+                        foreground=TEXT, rowheight=27, borderwidth=0,
+                        font=(FONT, 9))
+        style.configure("Treeview.Heading", background="#E4EBF7",
+                        foreground=PRIMARY, font=(FONT, 9, "bold"),
+                        borderwidth=0, padding=(6, 6))
+        style.map("Treeview",
+                  background=[("selected", "#CFE0F7")],
+                  foreground=[("selected", TEXT)])
+        style.map("Treeview.Heading", background=[("active", "#D8E3F5")])
+
+        # 滚动条
+        for orient in ("Vertical", "Horizontal"):
+            style.configure("{}.TScrollbar".format(orient),
+                            background="#D5E0F0", troughcolor=BG,
+                            bordercolor=BG, arrowcolor=PRIMARY, borderwidth=0)
+        # 日志区是深色的，滚动条得跟着一起深，不然整块黑里插一条白杠
+        style.configure("Log.Vertical.TScrollbar", background="#3B4A66",
+                        troughcolor="#151B26", bordercolor="#151B26",
+                        arrowcolor="#8FA3C4", borderwidth=0, arrowsize=12)
+        style.map("Log.Vertical.TScrollbar",
+                  background=[("active", PRIMARY), ("pressed", PRIMARY_D)])
+
+    def _hover_main(self, on):
+        """大按钮的悬停反馈（tk.Button 不认 activebackground 的鼠标进出）。"""
+        base = {STATE_IDLE: PRIMARY, STATE_RUNNING: RED}.get(self.state)
+        if base is None:
+            return
+        dark = {PRIMARY: PRIMARY_D, RED: RED_DARK}.get(base, base)
+        self.btn_main.config(background=dark if on else base)
+
+    def _build_ui(self):
+        self._setup_style()
+
+        # ---------------- 顶部横幅 ----------------
+        head = tk.Frame(self.root, background=HEAD_BG)
         head.pack(fill="x")
-        inner = tk.Frame(head, background="#f5f6f8", padx=18, pady=11)
-        inner.pack(fill="x")
+        wrap = tk.Frame(head, background=HEAD_BG, padx=20, pady=13)
+        wrap.pack(fill="x")
 
-        # 第 1 行：NapCat 连接 —— 一切的前提，放最上面
-        self.lbl_conn = tk.Label(inner, text="● 正在检查 …", font=(FONT, 10),
-                                 background="#f5f6f8", foreground=MUTED)
-        self.lbl_conn.pack(anchor="w")
+        line1 = tk.Frame(wrap, background=HEAD_BG)
+        line1.pack(fill="x")
+        tk.Label(line1, text="大肥鱼直播姬", background=HEAD_BG,
+                 foreground="white", font=(FONT, 15, "bold")).pack(side="left")
+        self.lbl_state = tk.Label(line1, text="", background=HEAD_BG,
+                                  foreground="#BFD3F5", font=(FONT, 10))
+        self.lbl_state.pack(side="right", pady=(7, 0))
 
-        # 第 2 行：监控状态
-        self.lbl_state = tk.Label(inner, text="", font=(FONT, 11, "bold"),
-                                  background="#f5f6f8", foreground=MUTED)
-        self.lbl_state.pack(anchor="w", pady=(3, 0))
+        # NapCat 连接 —— 一切的前提
+        self.lbl_conn = tk.Label(wrap, text="● 正在检查 …", background=HEAD_BG,
+                                 foreground="#CFE0FF", font=(FONT, 10),
+                                 anchor="w", justify="left")
+        self.lbl_conn.pack(fill="x", pady=(8, 0))
 
-        # 第 3 行：触发源一览（原来是散在四处的小标签，现在收成一行）
-        self.lbl_sources = tk.Label(inner, text="", font=(FONT, 9),
-                                    background="#f5f6f8", foreground=MUTED,
-                                    justify="left", anchor="w", wraplength=880)
-        self.lbl_sources.pack(anchor="w", fill="x", pady=(5, 0))
+        # 触发源一览
+        self.lbl_sources = tk.Label(wrap, text="", background=HEAD_BG,
+                                    foreground="#9DB8E4", font=(FONT, 9),
+                                    anchor="w", justify="left", wraplength=900)
+        self.lbl_sources.pack(fill="x", pady=(5, 0))
 
-        # 告警行：平时为空，出问题（如 NapCat 掉线）才显形
-        self.lbl_alert = tk.Label(inner, text="", font=(FONT, 10, "bold"),
-                                  background="#f5f6f8", foreground=BAD_COLOR,
-                                  justify="left", anchor="w", wraplength=880)
-        self.lbl_alert.pack(anchor="w", fill="x")
-
-        tk.Frame(self.root, height=1, background="#dcdde0").pack(fill="x")
+        # 告警行：平时为空，出问题才显形
+        self.lbl_alert = tk.Label(wrap, text="", background=HEAD_BG,
+                                  foreground="#FFCCC2", font=(FONT, 10, "bold"),
+                                  anchor="w", justify="left", wraplength=900)
+        self.lbl_alert.pack(fill="x")
 
         # ---------------- 主操作区 ----------------
-        main = tk.Frame(self.root, padx=28, pady=18)
+        main = tk.Frame(self.root, background=BG, padx=20, pady=16)
         main.pack(fill="x")
 
         self.btn_main = tk.Button(
             main, text="开始直播通知", font=(FONT, 19, "bold"),
-            background=BLUE, foreground="white",
-            activebackground=BLUE_DARK, activeforeground="white",
-            relief="flat", cursor="hand2", bd=0,
+            background=PRIMARY, foreground="white",
+            activebackground=PRIMARY_D, activeforeground="white",
+            relief="flat", cursor="hand2", bd=0, highlightthickness=0,
             command=self.toggle_main)
-        self.btn_main.pack(fill="x", ipady=22)
+        self.btn_main.pack(fill="x", ipady=20)
+        self.btn_main.bind("<Enter>", lambda e: self._hover_main(True))
+        self.btn_main.bind("<Leave>", lambda e: self._hover_main(False))
 
-        # 快捷键提醒条：贴在大按钮正下方，免得开播时忘了按
+        # 提示条：贴在大按钮正下方
         self.lbl_hotkey_hint = tk.Label(
-            main, justify="center", font=(FONT, 12, "bold"),
-            background="#fff8e1", foreground="#a35b00",
-            padx=14, pady=8, wraplength=820)
-        self.lbl_hotkey_hint.pack(fill="x", pady=(12, 0))
+            main, justify="center", font=(FONT, 11, "bold"),
+            background="#FFF6DC", foreground="#8A5A00",
+            padx=12, pady=8, wraplength=840, bd=0)
+        self.lbl_hotkey_hint.pack(fill="x", pady=(11, 0))
 
         self.lbl_tip = tk.Label(
-            main, justify="center", font=(FONT, 9), foreground=MUTED,
+            main, justify="center", font=(FONT, 9), background=BG,
+            foreground=MUTED,
             text="点一下就开始，之后可以一直挂着。"
                  "程序跑在独立的 QQ 副本上，你自己聊天的 QQ 不受影响。")
-        self.lbl_tip.pack(pady=(10, 0))
+        self.lbl_tip.pack(pady=(9, 0))
 
         # ---------------- 标签页 ----------------
         nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True, padx=12, pady=(4, 10))
+        nb.pack(fill="both", expand=True, padx=14, pady=(2, 12))
         self.notebook = nb
 
-        self.tab_log = ttk.Frame(nb)
-        self.tab_groups = ttk.Frame(nb)
-        self.tab_trigger = ttk.Frame(nb)
-        self.tab_message = ttk.Frame(nb)
+        self.tab_log = tk.Frame(nb, background=BG)
+        self.tab_groups = tk.Frame(nb, background=BG)
+        self.tab_trigger = tk.Frame(nb, background=BG)
+        self.tab_message = tk.Frame(nb, background=BG)
         nb.add(self.tab_log, text="运行日志")
         nb.add(self.tab_groups, text="通知群")
         nb.add(self.tab_trigger, text="触发方式")
@@ -339,30 +572,54 @@ class App:
         self._build_message_tab()
 
     def _build_log_tab(self):
-        f = ttk.Frame(self.tab_log, padding=10)
-        f.pack(fill="both", expand=True)
-        self.txt_log = ScrolledText(f, wrap="word", state="disabled",
-                                    font=("Consolas", 9),
-                                    background="#1b1c1e", foreground="#d6d7d9",
-                                    insertbackground="#d6d7d9", relief="flat")
-        self.txt_log.pack(fill="both", expand=True)
-        ttk.Button(f, text="清空日志", command=self.clear_log).pack(anchor="e", pady=(6, 0))
+        page = tk.Frame(self.tab_log, background=BG, padx=12, pady=12)
+        page.pack(fill="both", expand=True)
+
+        bar = tk.Frame(page, background=BG)
+        bar.pack(fill="x", pady=(0, 8))
+        tk.Label(bar, text="程序运行记录　出问题先看这里", background=BG,
+                 foreground=MUTED, font=(FONT, 9)).pack(side="left")
+        ttk.Button(bar, text="清空", width=8,
+                   command=self.clear_log).pack(side="right")
+        ttk.Button(bar, text="打开日志文件夹", width=15,
+                   command=self.open_log_dir).pack(side="right", padx=(0, 6))
+
+        outer = tk.Frame(page, background=BORDER)
+        outer.pack(fill="both", expand=True)
+        # 不用 ScrolledText：它内部挂的是 tk.Scrollbar，在 Windows 上由系统
+        # 主题直接绘制，background/troughcolor 一律被忽略，深色日志框右边
+        # 会永远吊着一条惨白的系统滚动条。改用 ttk.Scrollbar 手动拼。
+        self.sb_log = ttk.Scrollbar(outer, orient="vertical",
+                                    style="Log.Vertical.TScrollbar")
+        self.txt_log = tk.Text(
+            outer, wrap="word", state="disabled", yscrollcommand=self.sb_log.set,
+            font=(pick_log_font(), 9), background="#1C2230", foreground="#C9D6E8",
+            insertbackground="#C9D6E8", relief="flat", padx=10, pady=8,
+            selectbackground="#2F5FA8", borderwidth=0, highlightthickness=0)
+        self.sb_log.config(command=self.txt_log.yview)
+        self.sb_log.pack(side="right", fill="y", padx=(0, 1), pady=1)
+        self.txt_log.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
 
     def _build_groups_tab(self):
-        wrap = ttk.Frame(self.tab_groups, padding=12)
-        wrap.pack(fill="both", expand=True)
+        self.sf_groups = ScrollFrame(self.tab_groups)
+        self.sf_groups.pack(fill="both", expand=True)
+        page = self.sf_groups.body
+
+        outer, card = make_card(page, "已配置的群", padx=12, pady=12)
+        outer.pack(fill="x")
 
         cols = ("on", "gid", "note", "role", "at")
-        heads = (("on", "启用", 60), ("gid", "群号", 130), ("note", "备注", 300),
-                 ("role", "我的身份", 100), ("at", "@方式", 120))
-        self.tree = ttk.Treeview(wrap, columns=cols, show="headings", height=7)
+        heads = (("on", "启用", 56), ("gid", "群号", 124), ("note", "备注", 280),
+                 ("role", "我的身份", 96), ("at", "@方式", 110))
+        self.tree = ttk.Treeview(card, columns=cols, show="headings", height=8)
         for key, title, width in heads:
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, anchor="w", stretch=(key == "note"))
         self.tree.pack(fill="both", expand=True)
+        self.tree.tag_configure("odd", background="#F7FAFF")
 
-        btns = ttk.Frame(wrap)
-        btns.pack(fill="x", pady=(8, 0))
+        btns = tk.Frame(card, background=CARD)
+        btns.pack(fill="x", pady=(10, 0))
         ttk.Button(btns, text="启用 / 禁用", width=13,
                    command=self.toggle_enabled).pack(side="left")
         ttk.Button(btns, text="切换 @方式", width=13,
@@ -371,29 +628,33 @@ class App:
                    command=self.edit_at_list).pack(side="left")
         ttk.Button(btns, text="删除选中", width=11,
                    command=self.remove_group).pack(side="left", padx=6)
+        self.lbl_group_count = tk.Label(btns, text="", background=CARD,
+                                        foreground=MUTED, font=(FONT, 9))
+        self.lbl_group_count.pack(side="right")
 
-        ttk.Label(wrap, foreground=MUTED, wraplength=840, justify="left",
-                  text="@全体成员 只有群主或管理员发出去才生效；普通成员请用"
-                       "「切换 @方式」改成 @指定人，再点「自定义 @名单」填 QQ 号。").pack(
-            anchor="w", pady=(10, 0))
+        card_hint(card,
+                  "@全体成员 只有群主或管理员发出去才生效。"
+                  "如果机器人只是普通成员，请改成「@指定人」再点「自定义 @名单」填 QQ 号。",
+                  pady=(10, 0))
 
-        add = ttk.LabelFrame(wrap, text=" 加群（机器人要先被拉进那个群） ", padding=10)
-        add.pack(fill="x", pady=(12, 0))
-        self.cmb_groups = ttk.Combobox(add, state="readonly", font=(FONT, 9))
+        add_outer, add = make_card(page, "加群", padx=12, pady=12)
+        add_outer.pack(fill="x", pady=(12, 0))
+        card_hint(add, "机器人必须先被拉进那个群，这里才刷得出来。",
+                  pady=(0, 8))
+        row = tk.Frame(add, background=CARD)
+        row.pack(fill="x")
+        self.cmb_groups = ttk.Combobox(row, state="readonly", font=(FONT, 9))
         self.cmb_groups.pack(side="left", fill="x", expand=True)
-        ttk.Button(add, text="刷新", width=8,
+        ttk.Button(row, text="刷新", width=8,
                    command=self.fetch_groups).pack(side="left", padx=(8, 0))
-        ttk.Button(add, text="添加", width=8,
+        ttk.Button(row, text="添加", width=8,
                    command=self.add_group).pack(side="left", padx=(6, 0))
 
     def _build_trigger_tab(self):
         """触发方式独立成页 —— 它决定「能不能用」，不该埋在设置列表底部。"""
-        outer = ttk.Frame(self.tab_trigger, padding=14)
-        outer.pack(fill="both", expand=True)
-
-        trig = ttk.LabelFrame(outer, text=" 开播时通知（勾选任意一种即可，可多选） ", padding=14)
-        trig.pack(fill="x")
-        trig.columnconfigure(1, weight=1)
+        self.sf_trigger = ScrollFrame(self.tab_trigger)
+        self.sf_trigger.pack(fill="both", expand=True)
+        page = self.sf_trigger.body
 
         self.var_platform = tk.BooleanVar()
         self.var_obs = tk.BooleanVar()
@@ -406,159 +667,185 @@ class App:
         self.var_platform.trace_add("write", lambda *a: self._refresh_hotkey_hint())
         self.var_obs.trace_add("write", lambda *a: self._refresh_hotkey_hint())
 
+        def check(parent, var, text, bold=True):
+            tk.Checkbutton(parent, variable=var, text=text, background=CARD,
+                           foreground=TEXT, activebackground=CARD,
+                           font=(FONT, 10 if bold else 9, "bold" if bold else "normal"),
+                           anchor="w", selectcolor="white",
+                           highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
+
         # ① 直播间轮询 —— 最通用
-        ttk.Checkbutton(trig, variable=self.var_platform,
-                        text="① 直播间开播时通知　推荐"
-                        ).grid(row=0, column=0, columnspan=2, sticky="w")
-        ttk.Label(trig, justify="left", foreground=MUTED, wraplength=760,
-                  text="不管用 OBS、直播姬、直播伴侣还是手机开播，只要房间真的开了就能检测到。"
-                  ).grid(row=1, column=0, columnspan=2, sticky="w", padx=(22, 0))
-        self.lbl_platform = ttk.Label(trig, text="直播间状态：—",
-                                      font=(FONT, 9, "bold"), foreground=MUTED)
-        self.lbl_platform.grid(row=2, column=0, columnspan=2, sticky="w",
-                               padx=(22, 0), pady=(2, 12))
+        outer, card = make_card(page, "开播时通知　勾选任意一种即可，可多选")
+        outer.pack(fill="x")
 
-        # ② OBS 推流事件
-        ttk.Checkbutton(trig, variable=self.var_obs,
-                        text="② OBS 开始推流时通知"
-                        ).grid(row=3, column=0, columnspan=2, sticky="w")
-        ttk.Label(trig, justify="left", foreground=MUTED, wraplength=760,
-                  text="精确到按下「开始推流」那一刻。需要 OBS 至少启动过一次"
-                       "（WebSocket 默认就是开的，密码程序自动读取）。"
-                  ).grid(row=4, column=0, columnspan=2, sticky="w", padx=(22, 0))
-        self.lbl_obs = ttk.Label(trig, text="OBS 状态：—",
-                                 font=(FONT, 9, "bold"), foreground=MUTED)
-        self.lbl_obs.grid(row=5, column=0, columnspan=2, sticky="w",
-                          padx=(22, 0), pady=(2, 12))
+        check(card, self.var_platform, "① 直播间开播时通知　推荐")
+        card_hint(card, "不管用 OBS、直播姬、直播伴侣还是手机开播，"
+                        "只要房间真的开了就能检测到。", indent=24, pady=(2, 0))
+        self.lbl_platform = tk.Label(card, text="直播间状态：—", background=CARD,
+                                     foreground=MUTED, font=(FONT, 9, "bold"),
+                                     anchor="w", justify="left")
+        self.lbl_platform.pack(anchor="w", padx=(24, 0), pady=(3, 14))
 
-        # ③ 全局快捷键
-        ttk.Checkbutton(trig, variable=self.var_hotkey_on,
-                        text="③ 全局快捷键（兜底）"
-                        ).grid(row=6, column=0, columnspan=2, sticky="w")
-        hkrow = ttk.Frame(trig)
-        hkrow.grid(row=7, column=0, columnspan=2, sticky="w", padx=(22, 0), pady=(4, 12))
+        check(card, self.var_obs, "② OBS 开始推流时通知")
+        card_hint(card, "精确到按下「开始推流」那一刻。需要 OBS 至少启动过一次"
+                        "（WebSocket 默认就是开的，密码程序自动读取）。",
+                  indent=24, pady=(2, 0))
+        self.lbl_obs = tk.Label(card, text="OBS 状态：—", background=CARD,
+                                foreground=MUTED, font=(FONT, 9, "bold"),
+                                anchor="w", justify="left")
+        self.lbl_obs.pack(anchor="w", padx=(24, 0), pady=(3, 14))
+
+        check(card, self.var_hotkey_on, "③ 全局快捷键（兜底）")
+        card_hint(card, "任何情况下按一下就推送，不依赖任何软件接口。",
+                  indent=24, pady=(2, 6))
+        hkrow = tk.Frame(card, background=CARD)
+        hkrow.pack(anchor="w", padx=(24, 0), pady=(0, 14))
         ttk.Entry(hkrow, textvariable=self.var_hotkey, width=16,
                   font=(FONT, 9)).pack(side="left")
         ttk.Button(hkrow, text="按下组合键设置…",
                    command=self.capture_hotkey).pack(side="left", padx=8)
-        ttk.Label(hkrow, text="任何情况下按一下就推送",
-                  foreground=MUTED).pack(side="left")
 
-        # ④ 进程检测
-        ttk.Checkbutton(trig, variable=self.var_proc,
-                        text="④ 直播软件一启动就通知　不推荐"
-                        ).grid(row=8, column=0, columnspan=2, sticky="w")
-        ttk.Label(trig, justify="left", foreground=MUTED, wraplength=760,
-                  text="打开软件 ≠ 开播。你开软件后还要调设备、试麦，"
-                       "这段时间会白提醒群友一次，所以默认关闭。"
-                  ).grid(row=9, column=0, columnspan=2, sticky="w", padx=(22, 0))
-        self.lbl_process = ttk.Label(trig, text="", font=(FONT, 9), foreground=MUTED)
-        self.lbl_process.grid(row=10, column=0, columnspan=2, sticky="w", padx=(22, 0))
+        check(card, self.var_proc, "④ 直播软件一启动就通知　不推荐")
+        card_hint(card, "打开软件 ≠ 开播。你开软件后还要调设备、试麦，"
+                        "这段时间会白提醒群友一次，所以默认关闭。",
+                  indent=24, pady=(2, 0))
+        self.lbl_process = tk.Label(card, text="", background=CARD,
+                                    foreground=MUTED, font=(FONT, 9), anchor="w")
+        self.lbl_process.pack(anchor="w", padx=(24, 0))
 
         # ---------------- 下播提示 ----------------
-        off = ttk.LabelFrame(outer, text=" 下播时通知 ", padding=14)
-        off.pack(fill="x", pady=(12, 0))
-        off.columnconfigure(1, weight=1)
-
         self.var_offline = tk.BooleanVar()
         self.var_offline_at = tk.BooleanVar()
         self.var_offline_tpl = tk.StringVar()
 
-        ttk.Checkbutton(off, variable=self.var_offline,
-                        text="下播时也发一条（依赖上面的「直播间开播时通知」）"
-                        ).grid(row=0, column=0, columnspan=3, sticky="w")
-        ttk.Label(off, text="文案").grid(row=1, column=0, sticky="nw",
-                                        pady=(10, 0), padx=(22, 8))
-        ttk.Entry(off, textvariable=self.var_offline_tpl, font=(FONT, 9)).grid(
-            row=1, column=1, columnspan=2, sticky="we", pady=(10, 0))
-        ttk.Label(off, foreground=MUTED, wraplength=760, justify="left",
-                  text="占位符：{duration} 会自动填成这次播了多久（如「2 小时 15 分钟」），"
-                       "另外 {title} {link} {time} {date} 也可用"
-                  ).grid(row=2, column=1, columnspan=2, sticky="w", pady=(2, 0))
-        ttk.Checkbutton(off, variable=self.var_offline_at,
-                        text="@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）"
-                        ).grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 0))
-        ttk.Label(off, foreground=MUTED, wraplength=760, justify="left",
-                  text="防误报：状态转离线后先等 60 秒复核，期间恢复直播就取消；"
-                       "轮播状态不会触发下播。"
-                  ).grid(row=4, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        off_outer, off = make_card(page, "下播时通知")
+        off_outer.pack(fill="x", pady=(12, 0))
+
+        check(off, self.var_offline,
+              "下播时也发一条（依赖上面的「直播间开播时通知」）")
+        card_hint(off, "占位符 {duration} 会自动填成这次播了多久（如「2 小时 15 分钟」），"
+                       "另外 {title} {link} {time} {date} 也可用。",
+                  indent=24, pady=(3, 8))
+        tplrow = tk.Frame(off, background=CARD)
+        tplrow.pack(fill="x", padx=(24, 0))
+        ttk.Entry(tplrow, textvariable=self.var_offline_tpl,
+                  font=(FONT, 9)).pack(fill="x")
+
+        tk.Checkbutton(off, variable=self.var_offline_at,
+                       text="@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）",
+                       background=CARD, foreground=TEXT, activebackground=CARD,
+                       anchor="w", selectcolor="white", highlightthickness=0,
+                       bd=0, cursor="hand2").pack(anchor="w", pady=(11, 0))
+        card_hint(off, "防误报：状态转离线后先等 60 秒复核，期间恢复直播就取消；"
+                       "轮播状态不会触发下播。", pady=(7, 0))
 
     def _build_message_tab(self):
-        outer = ttk.Frame(self.tab_message, padding=14)
-        outer.pack(fill="both", expand=True)
-
-        msg = ttk.LabelFrame(outer, text=" 开播通知文案 ", padding=12)
-        msg.pack(fill="x")
-        msg.columnconfigure(1, weight=1)
+        self.sf_message = ScrollFrame(self.tab_message)
+        self.sf_message.pack(fill="both", expand=True)
+        page = self.sf_message.body
 
         self.var_title = tk.StringVar()
         self.var_link = tk.StringVar()
 
-        ttk.Label(msg, text="标题").grid(row=0, column=0, sticky="w", pady=5, padx=(0, 10))
-        ttk.Entry(msg, textvariable=self.var_title, font=(FONT, 9)).grid(
-            row=0, column=1, sticky="we", pady=5)
-        ttk.Label(msg, text="直播间链接").grid(row=1, column=0, sticky="w", pady=5, padx=(0, 10))
-        ttk.Entry(msg, textvariable=self.var_link, font=(FONT, 9)).grid(
-            row=1, column=1, sticky="we", pady=5)
-        ttk.Label(msg, text="消息模板").grid(row=2, column=0, sticky="nw", pady=5, padx=(0, 10))
-        self.txt_tpl = tk.Text(msg, height=4, wrap="word", font=(FONT, 9))
-        self.txt_tpl.grid(row=2, column=1, sticky="we", pady=5)
-        ttk.Label(msg, foreground=MUTED,
-                  text="可用占位符：{title} {link} {time} {date}　换行写 \\n").grid(
-            row=3, column=1, sticky="w")
+        # ---------------- 开播通知文案 ----------------
+        m_outer, msg = make_card(page, "开播通知文案")
+        m_outer.pack(fill="x")
+        # make_card 的标题是 pack 进去的，同一容器不能再混用 grid，
+        # 所以下面所有 grid 布局都放在这个子框里。
+        grid = tk.Frame(msg, background=CARD)
+        grid.pack(fill="x")
+        grid.columnconfigure(1, weight=1)
 
-        beh = ttk.LabelFrame(outer, text=" 触发与发送 ", padding=12)
-        beh.pack(fill="x", pady=(12, 0))
+        def row_label(row, text, top=5):
+            tk.Label(grid, text=text, background=CARD, foreground=TEXT,
+                     font=(FONT, 9), anchor="w").grid(
+                row=row, column=0, sticky="nw", pady=(top, 0), padx=(0, 10))
+
+        row_label(0, "标题")
+        ttk.Entry(grid, textvariable=self.var_title, font=(FONT, 9)).grid(
+            row=0, column=1, sticky="we", pady=(5, 0))
+        row_label(1, "直播间链接")
+        ttk.Entry(grid, textvariable=self.var_link, font=(FONT, 9)).grid(
+            row=1, column=1, sticky="we", pady=(8, 0))
+        row_label(2, "消息模板")
+        self.txt_tpl = tk.Text(grid, height=4, wrap="word", font=(FONT, 9),
+                               background="#FBFCFE", foreground=TEXT,
+                               relief="solid", bd=1,
+                               highlightthickness=0, insertbackground=TEXT,
+                               padx=6, pady=4)
+        self.txt_tpl.grid(row=2, column=1, sticky="we", pady=(8, 0))
+        tk.Label(grid, text="可用占位符：{title} {link} {time} {date}　"
+                            "换行写 \\n",
+                 background=CARD, foreground=MUTED, font=(FONT, 8),
+                 anchor="w").grid(row=3, column=1, sticky="w", pady=(3, 0))
+
+        # ---------------- 触发与发送 ----------------
+        b_outer, beh = make_card(page, "触发与发送")
+        b_outer.pack(fill="x", pady=(12, 0))
+        bgrid = tk.Frame(beh, background=CARD)
+        bgrid.pack(fill="x")
 
         self.var_interval = tk.StringVar()
         self.var_confirm = tk.StringVar()
         self.var_cooldown = tk.StringVar()
         self.var_sendgap = tk.StringVar()
 
-        ttk.Label(beh, text="检查间隔").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        ttk.Spinbox(beh, from_=1, to=3600, textvariable=self.var_interval, width=6).grid(row=0, column=1)
-        ttk.Label(beh, text="秒", foreground=MUTED).grid(row=0, column=2, padx=(4, 20))
+        def num_field(c, col, label, var, lo, hi, unit, pad_right=24):
+            tk.Label(c, text=label, background=CARD, foreground=TEXT,
+                     font=(FONT, 9)).grid(row=0, column=col, sticky="w",
+                                          padx=(0, 6))
+            ttk.Spinbox(c, from_=lo, to=hi, textvariable=var,
+                        width=6).grid(row=0, column=col + 1)
+            tk.Label(c, text=unit, background=CARD, foreground=MUTED,
+                     font=(FONT, 9)).grid(row=0, column=col + 2,
+                                          padx=(4, pad_right))
 
-        ttk.Label(beh, text="防抖次数").grid(row=0, column=3, sticky="w", padx=(0, 6))
-        ttk.Spinbox(beh, from_=1, to=100, textvariable=self.var_confirm, width=6).grid(row=0, column=4)
-        ttk.Label(beh, text="次", foreground=MUTED).grid(row=0, column=5, padx=(4, 20))
+        num_field(bgrid, 0, "检查间隔", self.var_interval, 1, 3600, "秒", 20)
+        num_field(bgrid, 3, "防抖次数", self.var_confirm, 1, 100, "次", 20)
+        num_field(bgrid, 6, "冷却时间", self.var_cooldown, 0, 1440, "分钟", 0)
 
-        ttk.Label(beh, text="冷却时间").grid(row=0, column=6, sticky="w", padx=(0, 6))
-        ttk.Spinbox(beh, from_=0, to=1440, textvariable=self.var_cooldown, width=6).grid(row=0, column=7)
-        ttk.Label(beh, text="分钟", foreground=MUTED).grid(row=0, column=8, padx=(4, 0))
-
-        ttk.Label(beh, text="多群发送间隔").grid(row=1, column=0, sticky="w", pady=(12, 0))
-        ttk.Spinbox(beh, from_=0, to=600, textvariable=self.var_sendgap, width=6).grid(
-            row=1, column=1, pady=(12, 0))
-        ttk.Label(beh, text="秒（太快容易被风控）", foreground=MUTED).grid(
+        tk.Label(bgrid, text="多群发送间隔", background=CARD, foreground=TEXT,
+                 font=(FONT, 9)).grid(row=1, column=0, sticky="w", pady=(12, 0))
+        ttk.Spinbox(bgrid, from_=0, to=600, textvariable=self.var_sendgap,
+                    width=6).grid(row=1, column=1, pady=(12, 0))
+        tk.Label(bgrid, text="秒　太快容易被风控", background=CARD,
+                 foreground=MUTED, font=(FONT, 9)).grid(
             row=1, column=2, columnspan=6, sticky="w", padx=(4, 0), pady=(12, 0))
 
-        proc = ttk.LabelFrame(outer, text=" 进程名单（仅当勾了「④ 直播软件一启动就通知」时生效） ", padding=12)
-        proc.pack(fill="x", pady=(12, 0))
+        # ---------------- 进程名单 ----------------
+        p_outer, proc = make_card(
+            page, "进程名单　仅当勾了「④ 直播软件一启动就通知」时生效")
+        p_outer.pack(fill="x", pady=(12, 0))
         self.var_procs = tk.StringVar()
-        ttk.Entry(proc, textvariable=self.var_procs, font=(FONT, 9)).pack(fill="x")
+        ttk.Entry(proc, textvariable=self.var_procs,
+                  font=(FONT, 9)).pack(fill="x")
         ttk.Button(proc, text="列出当前直播相关进程",
                    command=self.list_live_processes).pack(anchor="w", pady=(8, 0))
 
         # ---------------- 启动行为 ----------------
-        boot = ttk.LabelFrame(outer, text=" 启动行为 ", padding=12)
-        boot.pack(fill="x", pady=(12, 0))
+        boot_outer, boot = make_card(page, "启动行为")
+        boot_outer.pack(fill="x", pady=(12, 0))
         self.var_autostart = tk.BooleanVar()
-        ttk.Checkbutton(boot, variable=self.var_autostart,
-                        text="打开程序后自动开始监控（不用再点大按钮）"
-                        ).pack(anchor="w")
-        ttk.Label(boot, foreground=MUTED, wraplength=760, justify="left",
-                  text="勾上之后，双击图标就等于直接把监控开起来了——背后会自动拉起 NapCat，"
-                       "大约 10 秒后就绪。只想改设置时建议别勾，否则每次都白起一遍 NapCat。"
-                  ).pack(anchor="w", padx=(22, 0), pady=(4, 0))
+        tk.Checkbutton(boot, variable=self.var_autostart,
+                       text="打开程序后自动开始监控（不用再点大按钮）",
+                       background=CARD, foreground=TEXT, activebackground=CARD,
+                       font=(FONT, 10, "bold"), anchor="w", selectcolor="white",
+                       highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
+        card_hint(boot, "勾上之后，双击图标就等于直接把监控开起来了——背后会自动拉起 "
+                        "NapCat，大约 10 秒后就绪。只想改设置时建议别勾，"
+                        "否则每次都白起一遍 NapCat。", indent=24, pady=(4, 0))
 
-        save = ttk.Frame(outer)
-        save.pack(fill="x", pady=(14, 0))
-        ttk.Button(save, text="保存", width=12,
-                   command=self.save_config_clicked).pack(side="left")
-        ttk.Button(save, text="重新载入", width=12,
+        # ---------------- 保存 ----------------
+        save = tk.Frame(page, background=BG)
+        save.pack(fill="x", pady=(16, 0))
+        self.btn_save = ttk.Button(save, text="保存设置", width=14,
+                                   style="Primary.TButton",
+                                   command=self.save_config_clicked)
+        self.btn_save.pack(side="left")
+        ttk.Button(save, text="放弃修改并重载", width=18,
                    command=self.reload_config).pack(side="left", padx=8)
-        self.lbl_saved = ttk.Label(save, text="", foreground=OK_COLOR)
+        self.lbl_saved = tk.Label(save, text="", background=BG,
+                                  foreground=OK_COLOR, font=(FONT, 9, "bold"))
         self.lbl_saved.pack(side="left", padx=10)
 
     # ==================================================================
@@ -836,13 +1123,21 @@ class App:
         if not self.cfg:
             return
         self.tree.delete(*self.tree.get_children())
-        for g in self.cfg["groups"]:
+        # 表格高度跟着群的个数走：只有 2 个群却撑 8 行，底下空一大片很难看；
+        # 超过 10 个就固定 10 行，由表格自己滚动。
+        self.tree.config(height=max(3, min(10, len(self.cfg["groups"]))))
+        for i, g in enumerate(self.cfg["groups"]):
             role_cn = ROLE_CN.get(self.role_of.get(g["group_id"]), "未知")
             at = "@全体成员" if g["at_all"] else (
                 "@{}人".format(len(g["at_list"])) if g["at_list"] else "不 @")
-            self.tree.insert("", "end", iid=str(g["group_id"]),
+            tags = ("odd",) if i % 2 else ()
+            self.tree.insert("", "end", iid=str(g["group_id"]), tags=tags,
                              values=("✔" if g["enabled"] else "✘", g["group_id"],
                                      g["note"] or "（无备注）", role_cn, at))
+        self.lbl_group_count.config(
+            text="共 {} 个群，其中 {} 个已启用".format(
+                len(self.cfg["groups"]),
+                sum(1 for g in self.cfg["groups"] if g["enabled"])))
 
     def _selected_group(self):
         sel = self.tree.selection()
@@ -1351,6 +1646,21 @@ class App:
         self.txt_log.config(state="normal")
         self.txt_log.delete("1.0", "end")
         self.txt_log.config(state="disabled")
+
+    def open_log_dir(self):
+        """在资源管理器里打开日志目录 —— 界面上的日志关掉就没了，磁盘上的还在。"""
+        path = getattr(core, "LOG_DIR", os.path.join(HERE, "logs"))
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError:
+            pass
+        if not os.path.isdir(path):
+            messagebox.showinfo("找不到日志目录", "还没有生成过日志。")
+            return
+        try:
+            os.startfile(path)
+        except OSError as exc:
+            messagebox.showerror("打不开", "打不开日志目录：{}".format(exc))
 
     def run_async(self, work, done=None):
         def runner():
