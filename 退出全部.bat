@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-title Exit QQ Live Notify completely
+title Exit DaFeiYu Live Notifier completely
 
 rem ===========================================================================
 rem  Closes everything this package started:

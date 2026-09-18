@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-QQ 群开播自动 @全体成员 通知器  (qq-live-notify)
-================================================
+大肥鱼直播姬 —— 开播自动往 QQ 群发 @全体成员 通知
+====================================================
 
 监控直播软件进程（OBS / 直播伴侣 / 直播姬 ...），一旦检测到开播，
 就通过 NapCat（OneBot v11 HTTP 接口）向配置好的 QQ 群发送 @全体成员 通知。
@@ -41,7 +41,8 @@ try:
 except ImportError:                # 缺文件时降级为纯进程检测
     triggers = None
 
-APP_NAME = "qq-live-notify"
+APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
+DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
 VERSION = "1.0.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -795,7 +796,7 @@ def start_control_server(cfg, on_trigger, get_status):
             path = self.path.split("?", 1)[0].rstrip("/") or "/"
 
             if path == "/":
-                return self._send(200, _CONTROL_PAGE.format(app=APP_NAME, version=VERSION),
+                return self._send(200, _CONTROL_PAGE.format(app=DISPLAY_NAME, version=VERSION),
                                   "text/html; charset=utf-8")
 
             if path in ("/status", "/health"):
@@ -1016,7 +1017,7 @@ def cmd_check(cfg):
     problems = []
 
     log("=" * 62)
-    log("{} v{} 自检".format(APP_NAME, VERSION))
+    log("{} v{} 自检".format(DISPLAY_NAME, VERSION))
     log("=" * 62)
     log("Python：{}".format(sys.version.split()[0]))
     log("配置文件：{}".format(cfg["_path"]))
@@ -1208,7 +1209,7 @@ def main(argv=None):
 
     parser = argparse.ArgumentParser(
         prog="live_notify.py",
-        description="QQ 群开播自动 @全体成员 通知器",
+        description="大肥鱼直播姬 —— 开播自动往 QQ 群发 @全体成员 通知",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="示例：\n"
                "  python live_notify.py check    先自检\n"

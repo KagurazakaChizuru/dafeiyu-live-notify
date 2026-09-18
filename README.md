@@ -1,4 +1,4 @@
-# QQ 开播通知器
+# 大肥鱼直播姬
 
 开播时自动往 QQ 群发 `@全体成员` 通知的 Windows 小工具。绿色免安装，纯 Python 标准库 + tkinter，无任何第三方依赖。
 
@@ -220,7 +220,7 @@ python live_notify.py groups    # 列出机器人所在的所有群
 ```bash
 pip install pyinstaller
 python -m PyInstaller --onefile --windowed --icon _build/app.ico \
-       --name "QQ开播通知器" gui.py
+       --name "大肥鱼直播姬" gui.py
 ```
 
 图标由 `_build/_makeicon.py` 生成 —— 纯 Python 手写 PNG 编码 + 4 倍超采样抗锯齿，

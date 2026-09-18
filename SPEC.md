@@ -1,8 +1,8 @@
-# 设计规格 · QQ 开播通知器
+# 设计规格 · 大肥鱼直播姬
 
 | | |
 |---|---|
-| 项目 | `qq-live-notify` |
+| 项目 | `dafeiyu-live-notify`（原 `qq-live-notify`） |
 | 版本 | 1.0 |
 | 状态 | 已实现并验证 |
 | 最后更新 | 2026-09-17 |
@@ -672,8 +672,8 @@ NapCat 通过 `CREATE_NO_WINDOW` 启动（配合无 `pause` 的 `launcher-hidden
 ### 13.1 目录结构（运行态）
 
 ```
-QQ开播通知器/
-├── QQ开播通知器.exe       PyInstaller onefile，约 10.4 MB
+大肥鱼直播姬/
+├── 大肥鱼直播姬.exe       PyInstaller onefile，约 10.4 MB
 ├── 使用说明.txt
 └── app/
     ├── gui.py / live_notify.py / triggers.py
@@ -688,7 +688,7 @@ QQ开播通知器/
 ```
 pip install pyinstaller
 python -m PyInstaller --onefile --windowed --icon _build/app.ico \
-       --name "QQ开播通知器" gui.py
+       --name "大肥鱼直播姬" gui.py
 ```
 
 `exe` 内含 Python 运行时，因此**目标机器无需安装 Python**。

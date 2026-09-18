@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-title QQ Live Notify - Group List
+title DaFeiYu Live Notifier - Group List
 
 call "%~dp0_find-python.bat"
 if not defined PY (

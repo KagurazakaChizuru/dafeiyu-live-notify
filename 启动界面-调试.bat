@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-title QQ Live Notify - GUI (debug)
+title DaFeiYu Live Notifier - GUI (debug)
 
 rem Same as the normal GUI launcher, but keeps a console window so that any
 rem startup error is visible instead of silently disappearing.

@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-title QQ Live Notify - One Click Start
+title DaFeiYu Live Notifier - One Click Start
 
 rem ===========================================================================
 rem  One click start:

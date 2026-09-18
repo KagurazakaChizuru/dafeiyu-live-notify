@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
-title QQ Live Notify - Rehearsal
+title DaFeiYu Live Notifier - Rehearsal
 
 call "%~dp0_find-python.bat"
 if not defined PY (

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-QQ 开播通知器 —— 图形界面
+大肥鱼直播姬 —— 图形界面
 ==========================
 
 设计目标：傻瓜化。整个程序只有一个按钮。
@@ -216,7 +216,7 @@ def wait_for_port(port, seconds, should_cancel=None):
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("QQ 开播通知器")
+        self.root.title("大肥鱼直播姬")
         self.root.geometry("960x730")
         self.root.minsize(880, 640)
 
