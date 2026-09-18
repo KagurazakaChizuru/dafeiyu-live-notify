@@ -21,6 +21,7 @@ import json
 import os
 import sys
 import threading
+import time
 from http.server import ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -389,6 +390,34 @@ def run_corner_tests():
     return failures
 
 
+def run_click_guard_tests():
+    """启动豁免期：启动后一小段时间内的点击要吞掉。
+
+    为什么要这个 —— 实测踩到过两次（主题开关、标签栏）：程序启动时如果鼠标
+    恰好停在某个控件上，Windows 会把光标位置上那一次点击投递进来，那个控件
+    就被"点"了一下。用户看到的是"程序自己动了一下"，极难自行诊断。
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    try:
+        import gui                      # 只用纯函数，不需要建窗口
+    except Exception as exc:
+        check("gui.py 能否导入", False, str(exc))
+        return failures
+
+    gui.start_click_guard()
+    check("刚启动时处于豁免期", gui.click_ready() is False)
+    time.sleep(gui.CLICK_GRACE_SECONDS + 0.1)
+    check("过了豁免期就放行", gui.click_ready() is True)
+    return failures
+
+
 def main():
     live_notify._setup_console()          # 先切 UTF-8，否则中文输出会乱码
     path = make_config()
@@ -432,9 +461,14 @@ def main():
     failures += run_redact_tests()
 
     print("\n" + "#" * 70)
-    print("# 8/8  圆角抗锯齿")
+    print("# 8/9  圆角抗锯齿")
     print("#" * 70)
     failures += run_corner_tests()
+
+    print("\\n" + "#" * 70)
+    print("# 9/9  启动豁免期（防止鼠标误触）")
+    print("#" * 70)
+    failures += run_click_guard_tests()
 
     print("\n" + "=" * 70)
     print("命令退出码：check={check}  test={test}  send={send}".format(**results))

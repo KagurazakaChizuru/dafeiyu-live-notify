@@ -705,6 +705,8 @@ class RoundedButton(tk.Canvas):
         self.bind("<Leave>", lambda e: self._paint(self._base))
 
     def _on_click(self, _event=None):
+        if not click_ready():
+            return
         if self._enabled and self._command:
             self._command()
 
@@ -785,6 +787,35 @@ class RoundedButton(tk.Canvas):
         self._anim.cancel()
 
 
+#: 启动豁免期（秒）。
+#:
+#: 实测踩到过两次（主题开关、标签栏）：程序启动时如果鼠标恰好停在某个控件上，
+#: Windows 会把光标位置上那一次点击投递进来，那个控件就被"点"了一下 ——
+#: 用户看到的是"程序自己动了一下"，极难自行诊断。
+#:
+#: 这段时间内不认点击。代价是启动后 0.6 秒内点不动东西，可以忽略。
+CLICK_GRACE_SECONDS = 0.8
+_boot_time = None
+
+
+def start_click_guard():
+    """记下启动时刻。App 构造时调用一次。"""
+    global _boot_time
+    _boot_time = time.time()
+
+
+def click_ready():
+    """是否已经过了启动豁免期。
+
+    注意这个判断只该放在**点击入口**上。不要放进 App.toggle_main /
+    select_tab 这类方法里 —— 它们在构建界面时也会被程序自己调用，
+    放进去会把初始化一起拦掉。
+    """
+    if _boot_time is None:
+        return True
+    return (time.time() - _boot_time) > CLICK_GRACE_SECONDS
+
+
 class TabStrip(tk.Frame):
     """自绘标签栏，替掉 ttk.Notebook 自带的那一条。
 
@@ -819,7 +850,8 @@ class TabStrip(tk.Frame):
                            background=background, foreground=MUTED,
                            padx=20, cursor="hand2")
             lbl.pack(side="left", fill="y")
-            lbl.bind("<Button-1>", lambda e, i=i: self.command(i))
+            lbl.bind("<Button-1>",
+                     lambda e, i=i: click_ready() and self.command(i))
             lbl.bind("<Enter>", lambda e, i=i: self._hover(i, True))
             lbl.bind("<Leave>", lambda e, i=i: self._hover(i, False))
             self._tabs.append(lbl)
@@ -886,6 +918,8 @@ class ToggleSwitch(tk.Canvas):
         self._draw()
 
     def _click(self, _event=None):
+        if not click_ready():
+            return
         self.var.set(not self.var.get())
         if self.command:
             self.command()
@@ -1034,7 +1068,8 @@ class ThemeToggle(tk.Canvas):
         self._face = SURFACE
         self._ink = TEXT
         self._label = None
-        self.bind("<Button-1>", lambda e: self.command())
+        self.bind("<Button-1>",
+                  lambda e: click_ready() and self.command())
         self.bind("<Enter>", lambda e: self._hover_set(True))
         self.bind("<Leave>", lambda e: self._hover_set(False))
         self._draw()
@@ -1350,6 +1385,11 @@ class App:
         self.root.after(3000, self._poll_trigger)
         self.root.after(900, self._maybe_autostart)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+        # 豁免期计时**必须在这里起步**，不能放在 __init__ 开头 ——
+        # 构建界面本身要花几百毫秒，等窗口真正出现时豁免期早就过去了，等于没装。
+        # 误触是"窗口出现的那一刻"发生的，计时就得从那一刻算。
+        start_click_guard()
 
     # ==================================================================
     #  界面
