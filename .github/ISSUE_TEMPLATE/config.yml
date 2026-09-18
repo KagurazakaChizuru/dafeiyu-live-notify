@@ -1,0 +1,13 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 📖 使用文档
+    url: https://github.com/KagurazakaChizuru/dafeiyu-live-notify/blob/main/docs/%E4%BD%BF%E7%94%A8%E6%96%87%E6%A1%A3.md
+    about: 怎么装、怎么配、界面怎么读、出问题了怎么办
+
+  - name: 🔧 技术文档
+    url: https://github.com/KagurazakaChizuru/dafeiyu-live-notify/blob/main/docs/%E6%8A%80%E6%9C%AF%E6%96%87%E6%A1%A3.md
+    about: 设计原理、接口规格，以及已知限制
+
+  - name: 📦 最新版本下载
+    url: https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/latest
+    about: 不想碰命令行就下这个 zip

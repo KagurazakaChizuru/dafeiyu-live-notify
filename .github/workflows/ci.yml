@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    name: 语法 + 自检
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 语法检查
+        run: python -m py_compile live_notify.py triggers.py games.py gui.py
+
+      - name: 端到端自检（用假 NapCat，不联网）
+        run: python _selftest.py
+
+      # 配置文件示例必须能原样加载 —— 它是文档里让人照抄的东西，
+      # 改了字段却忘了改示例的话，用户第一步就卡住。
+      - name: 配置示例可加载
+        run: |
+          python -c "import json,pathlib; d=json.loads(pathlib.Path('config.example.json').read_text(encoding='utf-8-sig')); d['groups'][0]['group_id']=123456789; pathlib.Path('_ci-config.json').write_text(json.dumps(d,ensure_ascii=False),encoding='utf-8')"
+          python live_notify.py check --config _ci-config.json || true

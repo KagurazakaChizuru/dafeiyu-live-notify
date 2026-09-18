@@ -1,0 +1,62 @@
+name: Bug 反馈
+description: 有东西不工作？按这个填，能省掉好几轮来回。
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        先看一眼 **[使用文档的「出问题了怎么办」](https://github.com/KagurazakaChizuru/dafeiyu-live-notify/blob/main/docs/%E4%BD%BF%E7%94%A8%E6%96%87%E6%A1%A3.md)**，
+        大部分问题那里都有答案。
+
+  - type: input
+    id: version
+    attributes:
+      label: 程序版本
+      description: exe 右键 → 属性 → 详细信息 → 文件版本；或界面标题栏上的版本号
+      placeholder: "1.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 你做了什么、期望发生什么、实际发生了什么
+      placeholder: |
+        我点开播，群里应该收到 @全体成员，但什么都没发。
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: 运行日志
+      description: |
+        界面「运行日志」页里的内容，或者 `app\logs\` 下最新的那个文件。
+        **贴之前请把真实的群号和 QQ 号打码。**
+      render: text
+    validations:
+      required: false
+
+  - type: dropdown
+    id: trigger
+    attributes:
+      label: 用的是哪种触发方式
+      multiple: true
+      options:
+        - ① 直播间开播时通知
+        - ② OBS 开始推流时通知
+        - ③ 全局快捷键
+        - ④ 直播软件一启动就通知
+    validations:
+      required: false
+
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      description: 系统版本、Python 版本（如果用源码跑）、OBS / 直播姬版本
+      placeholder: "Windows 11 24H2 / B站直播姬 7.64"
+    validations:
+      required: false

@@ -68,6 +68,10 @@ def run_engine_tests(path):
             failures.append(name)
 
     # ---------- 用例 A：防抖 + 冷却 ----------
+    # 注意分工：防抖（连续命中 N 次才算开播）是 TriggerEngine 的活；
+    # 冷却（同一次开播不许发两遍）由外层 CooldownGate 管，TriggerEngine
+    # 自己完全不看冷却。所以这里必须像 cmd_watch 那样把两者接起来测 ——
+    # 直接把 fired.append 当回调，测的是一个根本不存在的行为。
     cfg = live_notify.load_config(path)
     cfg["watch"]["processes"] = ["obs64.exe"]
     cfg["watch"]["confirm_checks"] = 2
@@ -75,7 +79,16 @@ def run_engine_tests(path):
     cfg["behavior"]["cooldown_minutes"] = 30
 
     fired = []
-    eng = live_notify.TriggerEngine(cfg, lambda r: fired.append(r))
+    gate = live_notify.triggers.CooldownGate(30)
+
+    def fire(reason):
+        allowed, _remain = gate.allow()
+        if not allowed:
+            return
+        gate.mark()
+        fired.append(reason)
+
+    eng = live_notify.TriggerEngine(cfg, fire)
     state = {"procs": ["explorer.exe"]}
     live_notify.list_processes = lambda: list(state["procs"])
 

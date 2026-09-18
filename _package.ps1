@@ -76,8 +76,8 @@ try {
     }
 
     # app\ = this repo, minus everything private or third-party
-    $denyDirs = @('.git', 'dist', 'napcat', 'qq-napcat', 'qq-napcat-private',
-                  'logs', '__pycache__', '_qqcopy_test')
+    $denyDirs = @('.git', '.github', 'dist', 'napcat', 'qq-napcat',
+                  'qq-napcat-private', 'logs', '__pycache__', '_qqcopy_test')
     $denyFiles = @('config.json', '_account.txt', 'gui-error.log',
                    '.gitignore', '.gitattributes')
     $denyExt = @('.bak', '.pyc', '.exe', '.zip')
@@ -91,6 +91,11 @@ try {
         $copied++
     }
     Write-Host "staged $copied top-level items into app\"
+
+    # Repo-facing assets the end user has no use for.
+    foreach ($junk in @('social-preview.png', 'icon-preview.png')) {
+        Remove-Item (Join-Path $pkgApp "_build\$junk") -Force -ErrorAction SilentlyContinue
+    }
 
     # defensive: make sure nothing forbidden slipped through
     $bad = @()

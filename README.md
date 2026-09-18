@@ -1,5 +1,11 @@
 # 大肥鱼直播姬
 
+[![Release](https://img.shields.io/github/v/release/KagurazakaChizuru/dafeiyu-live-notify?color=2F5FA8&label=release)](https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/latest)
+[![License](https://img.shields.io/github/license/KagurazakaChizuru/dafeiyu-live-notify?color=2F5FA8)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-2F5FA8)](#)
+[![Python](https://img.shields.io/badge/python-3.8%2B-2F5FA8)](#)
+[![Dependencies](https://img.shields.io/badge/dependencies-0-1E7A4D)](#)
+
 开播时自动往 QQ 群发 `@全体成员` 通知的 Windows 小工具。
 绿色免安装，纯 Python 标准库 + tkinter，**零第三方依赖**。
 
