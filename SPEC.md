@@ -6,7 +6,7 @@
 | 版本 | 1.0 |
 | 状态 | 已实现并验证 |
 | 最后更新 | 2026-09-17 |
-| 代码规模 | 约 2880 行 Python（核心 1487 行 / 界面 1223 行 / 测试 394 行，另含图标生成器 172 行） |
+| 代码规模 | 约 3100 行 Python（核心 1660 行 / 界面 1400 行 / 测试 394 行），另含图标转换脚本 82 行 |
 
 ---
 
@@ -101,7 +101,7 @@ NapCat 默认启动注册表里那个 QQ 安装。QQ 桌面端是单实例的，
 | `_mock_napcat.py` | 109 | 假 OneBot 服务端，用于无 NapCat 测试 |
 | `_selftest.py` | 178 | 端到端自测 |
 | `_watchtest.py` | 107 | 常驻监控 + 控制端口集成测试 |
-| `_build/_makeicon.py` | 172 | 纯 Python 图标生成器 |
+| `_build/_makeicon.ps1` | 82 | 插画 → 多尺寸 ICO 转换脚本 |
 
 **依赖方向**：`triggers.py` 不 import `live_notify`，避免循环依赖；日志通过 `set_logger()` 注入。`live_notify.py` 对 `triggers` 做软导入（`try/except ImportError`），缺失时降级为纯进程检测。
 
@@ -695,11 +695,18 @@ python -m PyInstaller --onefile --windowed --icon _build/app.ico \
 
 ### 13.3 图标生成
 
-`_build/_makeicon.py` 以纯 Python 生成多尺寸 ICO：
+图标来自一张自绘插画（Q 版蓝发少女举黄色大喇叭喊「开播啦」），
+用 `_build/_makeicon.ps1` 转成多尺寸 ICO：
 
-- 自实现 PNG 编码（`zlib` + `struct`），不依赖 Pillow
-- 4 倍超采样抗锯齿
-- 输出 16/24/32/48/64/128/256 共 7 个尺寸
+- GDI+ `HighQualityBicubic` 缩放（Python 标准库没有图像缩放能力，用系统自带的 GDI+ 免装 Pillow）
+- 圆角裁切（半径 = 边长 × 0.14），带 alpha 透明
+- 输出 16/24/32/48/64/128/256 共 7 个尺寸，含 PNG 载荷
+- 成品 `app.ico` 约 240 KB；仓库不放插画源图
+
+> **两个 PowerShell 坑**（脚本注释里也记了）：
+> 1. 函数 `return` 数组会被自动展开，`byte[]` 变成 `object[]`，
+>    导致 `BinaryWriter.Write` 找不到重载、静默写不进去 —— ICO 只有 118 字节（头部）。
+> 2. 组装载荷时必须显式声明 `[byte[][]]`，否则 `+=` 同样会展开。
 
 ### 13.4 体积构成
 

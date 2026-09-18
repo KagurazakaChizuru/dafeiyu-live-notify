@@ -223,8 +223,14 @@ python -m PyInstaller --onefile --windowed --icon _build/app.ico \
        --name "大肥鱼直播姬" gui.py
 ```
 
-图标由 `_build/_makeicon.py` 生成 —— 纯 Python 手写 PNG 编码 + 4 倍超采样抗锯齿，
-不依赖 Pillow。
+图标是一张自绘插画，用 `_build/_makeicon.ps1` 转成 7 个尺寸的 ICO：
+GDI+ `HighQualityBicubic` 缩放 + 圆角裁切，不依赖 Pillow（用的是 Windows 自带的 GDI+）。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File _build/_makeicon.ps1 -Source 你的图.png -Preview
+```
+
+> 仓库只放成品 `app.ico`（约 240 KB）和转换脚本，不放插画源图。
 
 ---
 
