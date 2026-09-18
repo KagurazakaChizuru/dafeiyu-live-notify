@@ -1,0 +1,681 @@
+# 设计规格 · QQ 开播通知器
+
+| | |
+|---|---|
+| 项目 | `qq-live-notify` |
+| 版本 | 1.0 |
+| 状态 | 已实现并验证 |
+| 最后更新 | 2026-09-17 |
+| 代码规模 | 约 2880 行 Python（核心 1487 行 / 界面 1223 行 / 测试 394 行，另含图标生成器 172 行） |
+
+---
+
+## 1. 问题定义
+
+主播每次开播都要手动往若干个 QQ 群里发一条 `@全体成员` 通知，重复、易漏、且必须在开播那一刻及时发出。
+
+直觉方案是「监控直播软件的进程，检测到就发」。**这个方案有本质缺陷：**
+
+> 打开直播软件 ≠ 开播。
+
+OBS / 直播姬 / 直播伴侣 从启动到真正推流之间，通常隔着几分钟的设备调试、试麦、试妆、调灯光。如果在这个窗口发通知，群友会先收到一条无效提醒，然后干等——**这比不发更糟**。
+
+因此本项目的第一条设计原则是：
+
+> **只在「用户真正按下开播」的时刻触发。**
+
+这条原则直接决定了整个触发子系统的设计（见 §5）。
+
+### 第二个问题：NapCat 会占用用户自己的 QQ
+
+NapCat 默认启动注册表里那个 QQ 安装。QQ 桌面端是单实例的，结果是：通知器一开，用户自己的 QQ 就用不了了。
+
+本项目通过「独立 QQ 副本」解决（见 §6）。
+
+---
+
+## 2. 目标与非目标
+
+### 目标
+
+| 编号 | 目标 |
+|---|---|
+| G1 | 精确捕获「开始推流」时刻，而非「软件启动」时刻 |
+| G2 | 覆盖没有开放接口的直播软件（B站直播姬、抖音直播伴侣） |
+| G3 | 通知器常驻时，用户自己的 QQ 照常可用 |
+| G4 | 零第三方运行时依赖（仅 Python 标准库 + tkinter） |
+| G5 | 可视化配置，非技术用户可用 |
+| G6 | 可打包为免安装单文件 exe |
+| G7 | 全本地通信，不向任何第三方上报 |
+
+### 非目标
+
+- 不做直播内容的录制、转推、弹幕处理
+- 不做跨平台（仅 Windows，因为依赖 Win32 进程枚举与 `RegisterHotKey`）
+- 不绕过 QQ 的 `@全体成员` 权限限制（那是平台侧规则）
+- 不内置 QQ 或 NapCat 的分发（见 §15）
+
+---
+
+## 3. 术语
+
+| 术语 | 含义 |
+|---|---|
+| **触发源** | 一个能判定「开播了」的信号来源 |
+| **冷却闸门** | 跨触发源共享的限流器，保证一次开播只发一轮 |
+| **武装 / 重新武装** | 进程检测触发源的内部状态，表示「可以再次触发」 |
+| **独立 QQ 副本** | 为 NapCat 单独复制的一份 QQ 安装目录，用于制造第二个 QQ 实例 |
+| **OneBot** | QQ 机器人通信协议，本项目使用 v11 的 HTTP 形式 |
+| **obs-websocket** | OBS Studio 28+ 内置的远程控制插件，本项目的精确触发来源 |
+
+---
+
+## 4. 系统架构
+
+```
+┌──────────────────────── 触发层 ────────────────────────┐
+│                                                        │
+│  ObsWatcher            HotkeyListener      TriggerEngine│
+│  (obs-websocket)       (Win32 全局热键)     (进程检测)   │
+│       │                      │                  │      │
+│       └──────────┬───────────┴──────────────────┘      │
+│                  ▼                                     │
+│            CooldownGate  ← 跨源共享冷却                 │
+│                  │                                     │
+└──────────────────┼─────────────────────────────────────┘
+                   ▼
+┌──────────────────────── 发送层 ────────────────────────┐
+│  send_to_groups()  →  OneBot 客户端  →  HTTP           │
+└──────────────────┬─────────────────────────────────────┘
+                   ▼
+        NapCat (127.0.0.1:3000)  →  QQ 服务器  →  群
+```
+
+### 模块划分
+
+| 文件 | 行数 | 职责 |
+|---|---|---|
+| `live_notify.py` | 1070 | 配置加载、进程枚举、OneBot 客户端、消息构造、冷却闸门调用、控制端口、CLI |
+| `triggers.py` | 417 | 触发源：`WsClient`、`ObsWatcher`、`HotkeyListener`、`CooldownGate` |
+| `gui.py` | 1223 | tkinter 界面、NapCat 生命周期管理、配置读写 |
+| `_mock_napcat.py` | 109 | 假 OneBot 服务端，用于无 NapCat 测试 |
+| `_selftest.py` | 178 | 端到端自测 |
+| `_watchtest.py` | 107 | 常驻监控 + 控制端口集成测试 |
+| `_build/_makeicon.py` | 172 | 纯 Python 图标生成器 |
+
+**依赖方向**：`triggers.py` 不 import `live_notify`，避免循环依赖；日志通过 `set_logger()` 注入。`live_notify.py` 对 `triggers` 做软导入（`try/except ImportError`），缺失时降级为纯进程检测。
+
+---
+
+## 5. 触发子系统
+
+### 5.1 触发源规格
+
+#### 5.1.1 ObsWatcher —— OBS 推流事件（首选）
+
+| 项 | 规格 |
+|---|---|
+| 协议 | obs-websocket 5.x |
+| 连接 | `ws://127.0.0.1:<port>/`，默认端口 4455 |
+| 凭据来源 | 自动读取 `%APPDATA%\obs-studio\plugin_config\obs-websocket\config.json` |
+| 用户配置成本 | **零**（端口与密码均自动获取） |
+| 订阅 | `eventSubscriptions = Outputs(1<<6) \| General(1<<0) = 65` |
+| 触发条件 | `eventType == "StreamStateChanged"` 且 `eventData.outputActive == true` |
+| 重连 | 断线后 8 秒重试；OBS 未运行时每 20 秒探测一次配置 |
+| 辅助校验 | 连接建立后发 `GetStreamStatus` 请求，捕获「连上时已在推流」的情况 |
+
+**认证算法**（obs-websocket 5.x）：
+
+```
+secret   = base64( sha256( password + salt ) )
+auth     = base64( sha256( secret + challenge ) )
+```
+
+**WebSocket 客户端**：标准库无 WebSocket，故自行实现（`WsClient`），支持：
+- HTTP Upgrade 握手与 `Sec-WebSocket-Accept` 校验
+- 帧解析（FIN/opcode/掩码/126·127 扩展长度）
+- 自动应答 ping、主动发送 close
+- 通过 socket 超时抛 `WsIdle`，使主循环能周期性检查停止标志
+
+#### 5.1.2 HotkeyListener —— 全局热键（通用兜底）
+
+| 项 | 规格 |
+|---|---|
+| 机制 | Win32 `RegisterHotKey` + `PeekMessage` 消息泵 |
+| 默认值 | `ctrl+alt+k` |
+| 格式 | `修饰键+键`，修饰键 ∈ {ctrl, alt, shift, win}，键 ∈ 字母/数字/F1–F24 |
+| 必须含修饰键 | 是（防止误触） |
+| 注册失败处理 | **必须**在界面与日志中明确提示并给出可用替代值 |
+
+> **为什么需要它**：B站直播姬虽然是 OBS 内核，但**未附带 obs-websocket 插件**；抖音直播伴侣完全封闭。这两个软件无法程序化检测开播时刻。
+
+#### 5.1.3 TriggerEngine —— 进程检测（默认关闭）
+
+| 项 | 规格 |
+|---|---|
+| 匹配方式 | 进程名小写子串匹配 |
+| 防抖 | 连续命中 `confirm_checks` 次（默认 2）才触发 |
+| 重新武装 | 进程消失后持续 `stop_grace_seconds` 秒（默认 60）才恢复可触发 |
+| 默认状态 | **关闭**（`on_process_start: false`），原因见 §1 |
+
+**状态机**：
+
+```
+                    ┌──────────────┐
+      初始 ────────►│   已武装      │
+                    └──────┬───────┘
+                           │ 连续命中 ≥ confirm_checks
+                           ▼
+                    ┌──────────────┐
+                    │   已触发      │──── 调用 fire()，由闸门判定是否真发
+                    └──────┬───────┘
+                           │ 进程消失
+                           ▼
+                    ┌──────────────┐
+                    │  等待重新武装  │
+                    └──────┬───────┘
+                           │ 消失持续 ≥ stop_grace_seconds
+                           └──────► 回到「已武装」
+```
+
+#### 5.1.4 控制端口（手动触发）
+
+见 §8.3。任何情况下都可作为最后手段。
+
+### 5.2 冷却闸门
+
+**问题**：多个触发源可能同时命中（例如在 OBS 里点开播的同时又按了热键），导致重复发送。
+
+**规格**：所有触发源共用一个 `CooldownGate`：
+
+```
+fire(reason):
+    allowed, remain = gate.allow()
+    if not allowed:
+        log("触发（reason），但还在冷却期，还剩 remain 秒，跳过")
+        return False
+    gate.mark()
+    send_to_groups(reason)
+    return True
+```
+
+冷却时长由 `behavior.cooldown_minutes` 控制，默认 30 分钟；设为 `0` 则关闭冷却。
+
+### 5.3 触发语义矩阵
+
+| `on_process_start` | `on_obs_stream` | `hotkey` | 实际行为 |
+|---|---|---|---|
+| false | true | 有 | OBS 全自动；直播姬/直播伴侣靠热键 |
+| false | false | 有 | 全部靠热键 |
+| true | true | 有 | 三者并存（进程检测会误报，不推荐） |
+| false | false | 空 | 只能通过控制端口手动触发（界面会告警） |
+
+---
+
+## 6. 会话共存设计（独立 QQ 副本）
+
+### 6.1 问题
+
+NapCat.Shell 的官方启动器从注册表读取 QQ 安装路径并启动它。QQ 桌面端同一时间只允许一个实例，因此 NapCat 运行期间用户的 QQ 不可用。
+
+### 6.2 方案
+
+**利用 Windows 按可执行文件路径区分应用的特性**，为 NapCat 提供一份独立的 QQ 安装副本：
+
+```
+app/
+├── napcat/                 NapCat 本体
+│   ├── launcher-user.bat   官方启动器：查注册表 → 系统 QQ（会占用）
+│   ├── launcher-second.bat 本项目：直指副本 → 独立实例（不占用）
+│   └── launcher-hidden.bat 同上，但无 pause，供 CREATE_NO_WINDOW 使用
+└── qq-napcat/              独立的 QQ 安装副本
+    ├── QQ.exe
+    └── versions/<ver>/...
+```
+
+`launcher-second.bat` 与官方启动器的唯一区别：跳过注册表查询，直接
+
+```
+set "QQPath=%~dp0..\qq-napcat\QQ.exe"
+```
+
+### 6.3 验证结论（实测）
+
+```
+启动前：用户 QQ  8 个进程
+启动后：用户 QQ  8 个进程（全部存活）+ NapCat 副本 4 个进程
+停止后：用户 QQ  8 个进程（PID 完全一致）
+```
+
+### 6.4 停止语义（关键安全约束）
+
+`stop_napcat()` **必须**只终止副本实例：
+
+```
+1. taskkill /IM NapCatWinBootMain.exe /F
+2. 仅终止 ExecutablePath 含 "qq-napcat" 的 QQ.exe 进程
+   （通过 WMI 过滤，绝不用 taskkill /IM QQ.exe）
+```
+
+> 早期实现使用 `taskkill /IM QQ.exe /F`，会连带杀掉用户自己的 QQ。这是本项目最严重的一次缺陷，已修正并加入回归测试。
+
+---
+
+## 7. 通信接口规格
+
+### 7.1 OneBot v11（HTTP）
+
+`POST {base_url}/{action}`，`Content-Type: application/json`，可选 `Authorization: Bearer <token>`。
+
+| Action | 请求体 | 使用的响应字段 |
+|---|---|---|
+| `get_login_info` | `{}` | `data.user_id`、`data.nickname` |
+| `get_group_list` | `{}` | `data[].group_id`、`group_name`、`member_count` |
+| `get_group_member_info` | `{group_id, user_id}` | `data.role` |
+| `get_group_member_list` | `{group_id}` | `data[].user_id`、`role` |
+| `send_group_msg` | `{group_id, message[]}` | `data.message_id` |
+
+**响应判定**：`status == "ok"` 或 `retcode == 0` 视为成功。
+
+> **强制约束**：HTTP 客户端**必须**显式禁用系统代理。
+> `urllib` 默认读取 Windows 注册表代理设置，会把发往 `127.0.0.1` 的请求也交给代理，表现为代理返回 `502 Bad Gateway`，看起来像 NapCat 挂了。实现中使用 `build_opener(ProxyHandler({}))`。
+
+### 7.2 obs-websocket 5.x
+
+| op | 方向 | 载荷 |
+|---|---|---|
+| 0 | S→C | `Hello`：`{obsWebSocketVersion, rpcVersion, authentication?}` |
+| 1 | C→S | `Identify`：`{rpcVersion, authentication?, eventSubscriptions}` |
+| 2 | S→C | `Identified` |
+| 5 | S→C | `Event`：`{eventType, eventIntent, eventData}` |
+| 6 | C→S | `Request`：`{requestType, requestId}` |
+| 7 | S→C | `RequestResponse`：`{requestType, requestStatus{code}, responseData}` |
+| 9 | S→C | `Identify` 失败（认证错误） |
+
+本项目使用的事件：`StreamStateChanged`；使用的请求：`GetStreamStatus`（`requestStatus.code == 100` 表示成功）。
+
+### 7.3 本地控制端口
+
+绑定 `127.0.0.1`（**不可**绑定 `0.0.0.0`），默认端口 8899。
+
+| 路径 | 方法 | 说明 |
+|---|---|---|
+| `/` | GET | 极简 HTML 页面，一个手动触发按钮 |
+| `/status` | GET | JSON 状态：`armed`、`trigger_sources`、`obs`、`hotkey_ok`、`groups`、`last_fire` |
+| `/trigger` | GET | 手动触发一次（若配置了 `control.token`，需带 `?token=`） |
+
+---
+
+## 8. 配置规格
+
+### 8.1 完整 Schema
+
+```jsonc
+{
+  "onebot": {
+    "base_url": "http://127.0.0.1:3000",   // 必填，须以 http(s):// 开头
+    "access_token": "",                     // 可选，需与 NapCat 网络配置一致
+    "timeout": 10                           // 请求超时秒数
+  },
+
+  "groups": [                               // 必填，非空数组
+    {
+      "group_id": 123456789,                // 必填，纯数字群号
+      "enabled": true,                      // false 则跳过该群
+      "at_all": true,                       // @全体成员（需群主/管理员权限）
+      "at_list": [],                        // at_all 为 false 时 @ 这些 QQ 号
+      "note": "主群"                         // 仅用于界面显示
+    }
+  ],
+
+  "watch": {
+    "enabled": true,
+    "interval_seconds": 5,                  // 1 ~ 3600
+    "processes": ["obs64.exe", "livehime.exe"],
+    "confirm_checks": 2,                    // 1 ~ 100，防抖次数
+    "stop_grace_seconds": 60                // 0 ~ 86400，重新武装延迟
+  },
+
+  "message": {
+    "template": "🔴 开播了！\n\n{title}\n{link}\n\n大家快来捧场～",
+    "title": "今晚直播",
+    "link": "https://live.bilibili.com/..."
+  },
+
+  "behavior": {
+    "cooldown_minutes": 30,                 // 0 表示关闭冷却
+    "send_interval_seconds": 3,             // 多群之间的发送间隔
+    "dry_run": false                        // true = 全局彩排模式
+  },
+
+  "trigger": {
+    "on_process_start": false,              // 默认关闭，见 §1
+    "on_obs_stream": true,
+    "hotkey": "ctrl+alt+k"                  // 留空则禁用热键
+  },
+
+  "control": {
+    "enabled": true,
+    "port": 8899,
+    "token": ""                             // 非空则 /trigger 需鉴权
+  }
+}
+```
+
+### 8.2 默认进程名单
+
+```
+obs64.exe, obs32.exe, obs.exe,
+直播伴侣.exe, 直播伴侣 launcher.exe,
+livehime.exe, blivehime.exe, 直播姬.exe,
+livecompanion.exe, streamlabs obs.exe,
+yylive.exe, huya.exe, douyulive.exe
+```
+
+### 8.3 配置文件读取约束
+
+**必须**以 `utf-8-sig` 读取。记事本等编辑器会写入 UTF-8 BOM（`EF BB BF`），普通 `utf-8` 读取会把 BOM 当作 JSON 内容的第一个字符而解析失败。
+
+### 8.4 消息模板占位符
+
+| 占位符 | 展开为 |
+|---|---|
+| `{title}` | `message.title` |
+| `{link}` | `message.link` |
+| `{time}` | 当前时间 `HH:MM` |
+| `{date}` | 当前日期 `YYYY-MM-DD` |
+
+模板格式错误时降级为字面替换并告警，不中断发送。
+
+---
+
+## 9. 消息构造规格
+
+### 9.1 消息段数组
+
+```jsonc
+// at_all = true
+[
+  {"type": "at",   "data": {"qq": "all"}},
+  {"type": "text", "data": {"text": " "}},
+  {"type": "text", "data": {"text": "<渲染后的模板>"}}
+]
+
+// at_all = false, at_list = [10001, 10002]
+[
+  {"type": "at",   "data": {"qq": "10001"}},
+  {"type": "text", "data": {"text": " "}},
+  {"type": "at",   "data": {"qq": "10002"}},
+  {"type": "text", "data": {"text": " "}},
+  {"type": "text", "data": {"text": "<渲染后的模板>"}}
+]
+
+// 都不启用
+[
+  {"type": "text", "data": {"text": "<渲染后的模板>"}}
+]
+```
+
+> **规格要求**：每个 `at` 段后**必须**紧跟一个空格 `text` 段。QQ 不会自动在 `@` 后补空格，否则会渲染成 `@全体成员我开播啦`。
+
+### 9.2 群权限判定
+
+`@全体成员` 仅在发送者身份为**群主或管理员**时真正生效。普通成员发送后消息会显示，但不会提醒到人。
+
+**角色查询采用两段式**（`resolve_role()`）：
+
+```
+1. 调用轻量的 get_group_member_info
+2. 若结果为 owner/admin —— 采信，结束
+3. 若结果为 member（不利结果）—— 用 get_group_member_list 全量列表复核
+4. 复核仍找不到该成员 —— 返回 member
+```
+
+> **原因**：NapCat 刚登录、群成员缓存尚未加载完成时，`get_group_member_info` 会返回未初始化的默认值 `member`，导致程序误判「无管理员权限」，进而错误地把 `at_all` 关闭。本项目曾因此实际影响用户配置。
+
+### 9.3 发送策略
+
+- 按 `groups` 顺序逐个发送
+- 群之间间隔 `behavior.send_interval_seconds` 秒（防风控）
+- 单个群失败不中断其余群，逐群记录结果，最后汇总成功数
+- 汇总信息包含 `message_id`，便于在群里核对
+
+---
+
+## 10. 界面规格
+
+### 10.1 主界面
+
+顶部状态区实时显示两项：
+
+```
+● QQ 已就绪   示例机器人（10001）
+● 已检测到直播软件：livehime.exe
+```
+
+中部一个主操作按钮，三态：
+
+| 状态 | 按钮文字 | 背景色 |
+|---|---|---|
+| 空闲 | 开始直播通知 | 蓝 |
+| 进行中 | 请稍候 … | 灰（禁用） |
+| 运行中 | 停止监控 | 红 |
+
+按钮正下方为**快捷键提醒条**，三态：
+
+| 条件 | 显示 |
+|---|---|
+| 热键已启用 | 黄底：`⚠ 用 直播姬 / 直播伴侣 开播时，记得按一下 CTRL+ALT+K` |
+| 热键被禁用 | 灰底：提示不会自动通知 |
+| 未设热键 | 红底：`⚠ 还没有设置快捷键` |
+
+### 10.2 标签页
+
+| 标签 | 内容 |
+|---|---|
+| 运行日志 | 深色终端风格，滚动上限 1500 行，含 NapCat 转发输出（前缀 `[NapCat]`） |
+| 通知哪些群 | 群列表（启用 / 群号 / 备注 / 身份 / @方式）、启停、切换 @方式、自定义 @名单、删除、从 NapCat 拉取可用群 |
+| 通知内容与设置 | 标题 / 链接 / 模板、检查间隔 / 防抖 / 冷却 / 多群间隔、触发方式三开关、热键设置、进程名单 |
+
+### 10.3 热键捕获
+
+「按下组合键设置…」弹出捕获窗，直接按键录入：
+
+- 修饰键状态由 `KeyPress`/`KeyRelease` **手动跟踪**，不依赖 `event.state`
+  （Windows 上 Alt 常常不进入 `state`，依赖它会导致漏判）
+- 不支持无修饰键的单键组合
+- 支持字母、数字、F1–F24
+- 录入成功后提示「点保存并重新开始监控后生效」
+
+### 10.4 NapCat 生命周期管理（由界面负责）
+
+| 动作 | 行为 |
+|---|---|
+| 启动监控 | 检测 3000 端口 → 未就绪则以后台无窗口方式启动 NapCat → 最长等待 90 秒 → 再启动监控线程 |
+| 停止监控 | 置停止事件 → 等监控线程退出 → 关闭 NapCat 与私有 QQ 实例 |
+| 健康检查 | 监控运行期间每 8 秒检测 3000 端口；掉线则**自动重启 NapCat**，并重试一次 |
+| 关闭窗口 | 弹窗三选：全部停止 / 仅关界面 / 取消 |
+
+### 10.5 无窗口运行
+
+NapCat 通过 `CREATE_NO_WINDOW` 启动（配合无 `pause` 的 `launcher-hidden.bat`），
+其 stdout/stderr 由管道接入界面日志。用户不会看到任何黑色控制台窗口。
+
+---
+
+## 11. 已识别的陷阱与对策
+
+本节记录实现过程中实际踩到并修正的问题，是本规格中最具移植价值的部分。
+
+### 11.1 触发与检测
+
+| # | 陷阱 | 现象 | 对策 |
+|---|---|---|---|
+| T1 | 进程检测无法区分「开软件」与「开播」 | 准备工作期间误报 | 默认关闭，改用事件源 |
+| T2 | B站直播姬真实进程名是 `livehime.exe` | 配成 `blivehime.exe` 时子串匹配永远失败 | 名单补全两种写法 |
+| T3 | NapCat 群成员缓存竞态 | 刚登录时角色误判为 `member` | `resolve_role()` 全量复核 |
+| T4 | `ctrl+alt+l` 在本机已被占用 | 热键静默失效 | 注册失败显式告警 + 实测空闲值 `ctrl+alt+k` |
+
+### 11.2 进程与系统集成
+
+| # | 陷阱 | 现象 | 对策 |
+|---|---|---|---|
+| T5 | `Stop-Process -Name QQ -Force` 会杀掉用户自己的 QQ | 用户 QQ 被误关 | 仅按 `ExecutablePath` 过滤副本 |
+| T6 | `NapCatWinBootMain.exe` 只认**裸** QQ 号码 | 传 `-q <号>` 被丢弃，退化为扫码登录 | 传裸号码，由其自行补 `-q` |
+| T7 | `pythonw.exe` 下 `sys.stdout` 为 `None` | 所有 `print()` 抛异常 | 启动时补 `os.devnull` 黑洞流 |
+| T8 | PyInstaller 打包后 `__file__` 指向解包临时目录 | 找不到 `config.json` / `napcat` | 冻结态改用 `sys.executable` 推导数据目录 |
+
+### 11.3 网络
+
+| # | 陷阱 | 现象 | 对策 |
+|---|---|---|---|
+| T9 | `urllib` 读取 Windows 注册表代理 | 发往 `127.0.0.1` 的请求被代理拦截，返回 `502` | `ProxyHandler({})` 强制直连 |
+| T10 | NapCat WebUI 默认监听 `::`，且 `accessControlMode: "none"` | 局域网内任意设备可访问并控制机器人 | 改为 `127.0.0.1` + 64 位随机 token |
+
+### 11.4 批处理（.bat）
+
+| # | 陷阱 | 现象 | 对策 |
+|---|---|---|---|
+| T11 | cmd 按 OEM 代码页读取 .bat | UTF-8 中文导致**字节偏移错位**，注释碎片被当作命令执行 | `.bat` 一律保持纯 ASCII，中文只放在 Python 里 |
+| T12 | `if (...)` 块内出现未转义的右括号 | 块被提前终止，`cmd` 在**解析期**即报 `was unexpected at this time`（条件为假也报） | 块内文案避免括号 |
+| T13 | 探测脚本用 `exit /b 0` 提前退出 | 后续的派生变量（如 `PYW`）永远不会被赋值 | 统一 `goto :derive` 收口 |
+
+### 11.5 配置与分发
+
+| # | 陷阱 | 现象 | 对策 |
+|---|---|---|---|
+| T14 | 记事本保存 UTF-8 会带 BOM | `json.load` 报 `Unexpected UTF-8 BOM` | 配置以 `utf-8-sig` 读取 |
+| T15 | QQ 安装目录内残留更新包 `versions/*.zip` | 白白占用 79 MB | 分发前清理 |
+| T16 | 公开仓库误传 QQ 本体 | 侵犯腾讯著作权，会被 DMCA 下架 | `.gitignore` 硬隔离 + 提交前扫描 |
+
+---
+
+## 12. 测试策略
+
+### 12.1 测试装置
+
+`_mock_napcat.py` 实现一个假的 OneBot 服务端，使全部链路的验证无需真实 QQ：
+
+- 提供 `get_login_info` / `get_group_list` / `get_group_member_info` / `send_group_msg`
+- 内置三个群，角色分别为 `owner` / `member` / `member`，用于验证权限告警逻辑
+- 原样打印收到的消息段数组，便于人工核对格式
+
+### 12.2 测试用例
+
+| 文件 | 覆盖内容 |
+|---|---|
+| `_selftest.py` | 四群场景下 `check` / `test` / `send` 全链路；禁用群跳过；`at_all` 与 `at_list` 两种消息格式；**触发引擎状态机 10 项断言**（防抖、只触发一次、冷却拦截、退出后重新武装、子串匹配不误伤 `notobs.exe`） |
+| `_watchtest.py` | 常驻监控真实子进程 + 控制端口 `/status` 与 `/trigger` |
+
+### 12.3 关键回归项
+
+以下行为必须在每次改动后验证，因为它们曾真实出错：
+
+1. `stop_napcat()` 不得终止用户自己的 QQ
+2. `resolve_role()` 在缓存未就绪时不得误判为 `member`
+3. 热键必须能注册**并且**响应合成按键
+4. 所有 `.bat` 的非 ASCII 字节数必须为 0
+5. 配置文件读取必须容忍 BOM
+6. `at` 段后必须存在空格段
+
+---
+
+## 13. 打包与分发
+
+### 13.1 目录结构（运行态）
+
+```
+QQ开播通知器/
+├── QQ开播通知器.exe       PyInstaller onefile，约 10.4 MB
+├── 使用说明.txt
+└── app/
+    ├── gui.py / live_notify.py / triggers.py
+    ├── config.json        用户配置（不入版本库）
+    ├── _account.txt       机器人 QQ 号（不入版本库）
+    ├── napcat/            NapCat 本体，约 90 MB
+    └── qq-napcat/         独立 QQ 副本，约 1.1 GB
+```
+
+### 13.2 打包命令
+
+```
+pip install pyinstaller
+python -m PyInstaller --onefile --windowed --icon _build/app.ico \
+       --name "QQ开播通知器" gui.py
+```
+
+`exe` 内含 Python 运行时，因此**目标机器无需安装 Python**。
+
+### 13.3 图标生成
+
+`_build/_makeicon.py` 以纯 Python 生成多尺寸 ICO：
+
+- 自实现 PNG 编码（`zlib` + `struct`），不依赖 Pillow
+- 4 倍超采样抗锯齿
+- 输出 16/24/32/48/64/128/256 共 7 个尺寸
+
+### 13.4 体积构成
+
+| 部分 | 体积 |
+|---|---|
+| `qq-napcat/` | 1098 MB |
+| `napcat/` | 90 MB |
+| 程序本体 | < 1 MB |
+| **合计** | **约 1.19 GB** |
+
+---
+
+## 14. 已知限制
+
+1. **仅 Windows**。依赖 Win32 进程枚举（`CreateToolhelp32Snapshot`）与 `RegisterHotKey`。
+2. **直播姬 / 直播伴侣无法自动检测**。二者未提供任何开播事件接口，只能依赖全局热键。这是上游限制，非本项目可实现范围内的缺陷。
+3. **QQ 副本体积较大**（1.1 GB）。这是「不占用用户 QQ」这一能力的代价。
+4. **NapCat 版本敏感**。NapCat 需要与 QQ 构建版本匹配；QQ 自动更新后可能需要更新 NapCat。
+5. **存在账号风控风险**。NapCat 属第三方非官方协议端，建议使用小号。
+
+---
+
+## 15. 许可证边界
+
+| 组件 | 许可证 | 本项目义务 |
+|---|---|---|
+| 本项目代码 | MIT | 保留版权声明 |
+| NapCat | Limited Redistribution License（Mlikowa, 2024） | 可再分发，须附许可证全文并注明来源；**禁止商业使用**；修改版不得公开发布 |
+| QQ 本体 | 腾讯专有软件 | **不得再分发**。这是公开仓库的硬红线 |
+
+**因此本仓库的发布策略是**：只发布自研代码（约 160 KB），NapCat 由使用者自行从官方 Releases 下载，QQ 副本由使用者在本地自行复制生成。
+
+`.gitignore` 中对 `napcat/`、`qq-napcat/`、`config.json`、`_account.txt` 做了硬隔离；提交前应执行一次全量扫描，确认个人标识（群号、QQ 号、token、本机路径）未进入工作区与 git 历史。
+
+---
+
+## 附：运行时序（正常一次开播）
+
+```
+用户双击 exe
+  └─ GUI 启动，读 config.json（utf-8-sig）
+  └─ 后台健康检查线程启动
+
+用户点「开始直播通知」
+  └─ 校验配置 → 落盘
+  └─ 端口 3000 未监听 → CREATE_NO_WINDOW 启动 NapCat（launcher-hidden.bat）
+  └─ 轮询端口，最长 90 秒
+  └─ 启动监控线程 cmd_watch()
+       ├─ 启动控制端口 127.0.0.1:8899
+       ├─ 启动 ObsWatcher   → 连 obs-websocket，订阅 StreamStateChanged
+       └─ 启动 HotkeyListener → 注册 ctrl+alt+k
+
+用户在 OBS 里点「开始推流」
+  └─ ObsWatcher 收到 StreamStateChanged(outputActive=true)
+  └─ fire("OBS 开始推流")
+       └─ CooldownGate 放行
+       └─ 逐群构造消息段数组（at + 空格 + text）
+       └─ HTTP POST /send_group_msg（绕过系统代理）
+       └─ 记录 message_id
+
+用户停止推流 → ObsWatcher 记录状态，不发送
+
+用户点「停止监控」
+  └─ 置停止事件 → 监控线程退出 → 关闭控制端口
+  └─ 终止 NapCat 与私有 QQ 实例（仅限 qq-napcat 路径）
+```
