@@ -502,6 +502,79 @@ def _corner_alpha(r, corner):
     return out
 
 
+_BTN_MASK = {}          # (w, h, r) -> 每像素覆盖率
+_BTN_IMG = {}           # (w, h, r, fill, background) -> PhotoImage
+
+
+def _button_mask(w, h, r):
+    """整块圆角矩形的逐像素覆盖率。r 为 0 时就是纯矩形。
+
+    内部一大片是 1.0、外面是 0.0，只有边缘一圈是中间值 —— 生成时对这两种
+    走快路径，所以真正的浮点计算只发生在周长那一圈上。
+    """
+    key = (w, h, r)
+    got = _BTN_MASK.get(key)
+    if got is not None:
+        return got
+    rows = []
+    for y in range(h):
+        row = []
+        for x in range(w):
+            # 到最近那个"圆角圆心"的距离
+            cx = min(max(x, r), w - 1 - r) if r else x
+            cy = min(max(y, r), h - 1 - r) if r else y
+            dx = x - cx
+            dy = y - cy
+            d2 = dx * dx + dy * dy
+            if d2 <= (r - 0.5) ** 2:
+                row.append(1.0)
+                continue
+            # 边缘像素才做 4x4 超采样
+            hit = 0
+            for sy in range(4):
+                for sx in range(4):
+                    px = x + (sx + 0.5) / 4.0
+                    py = y + (sy + 0.5) / 4.0
+                    qx = min(max(px, r), w - 1 - r) if r else px
+                    qy = min(max(py, r), h - 1 - r) if r else py
+                    if (px - qx) ** 2 + (py - qy) ** 2 <= r * r:
+                        hit += 1
+            row.append(hit / 16.0)
+        rows.append(row)
+    _BTN_MASK[key] = rows
+    return rows
+
+
+def button_image(w, h, r, fill, background, cap=160):
+    """整块圆角按钮，抗锯齿烘焙进图片。"""
+    key = (w, h, r, fill, background)
+    got = _BTN_IMG.get(key)
+    if got is not None:
+        return got
+    mask = _button_mask(w, h, r)
+    fc, bc = rgb(fill), rgb(background)
+    img = tk.PhotoImage(width=w, height=h)
+    rows = []
+    for y in range(h):
+        mrow = mask[y]
+        cells = []
+        for x in range(w):
+            a = mrow[x]
+            if a >= 0.999:
+                cells.append(fill)
+            elif a <= 0.001:
+                cells.append(background)
+            else:
+                cells.append("#%02x%02x%02x" % tuple(
+                    int(round(bc[i] + (fc[i] - bc[i]) * a)) for i in range(3)))
+        rows.append("{" + " ".join(cells) + "}")
+    img.put(" ".join(rows))
+    if len(_BTN_IMG) >= cap:
+        _BTN_IMG.clear()
+    _BTN_IMG[key] = img
+    return img
+
+
 def _corner_image(r, corner, fill, background):
     """一个抗锯齿的圆角块。
 
@@ -592,10 +665,6 @@ class RoundedButton(tk.Canvas):
         r = max(0, min(self._radius, h // 2 - 1))
         x1, y1, x2, y2 = 1, 1, w - 1, h - 1
         self.delete("all")
-        self._corner_spots = {
-            "tl": (x1, y1), "tr": (x2 - r, y1),
-            "bl": (x1, y2 - r), "br": (x2 - r, y2 - r),
-        }
         self._corner_refs = {}          # 必须留引用，PhotoImage 被 GC 就白画了
         self._draw_body(r, x1, y1, x2, y2, self._cur)
         self._label = self.create_text((x1 + x2) // 2, (y1 + y2) // 2,
@@ -603,18 +672,19 @@ class RoundedButton(tk.Canvas):
                                        font=self._font)
 
     def _draw_body(self, r, x1, y1, x2, y2, color):
-        """中间用矩形（不需要抗锯齿），四个角换成抗锯齿小图。"""
+        """整块按钮贴一张抗锯齿图片。
+
+        **不要退回「四个角 + 中间矩形」的拼法。** 那是我踩过的坑：Tk 的矩形是
+        硬边整数像素，角落图片是按覆盖率混过色的，两种边缘模型凑不到一起，
+        接缝处必然出现一条肉眼可见的竖线。
+        """
         self.delete("body")
-        self.create_rectangle(x1 + r, y1, x2 - r, y2, fill=color,
-                              outline="", tags="body")
-        self.create_rectangle(x1, y1 + r, x2, y2 - r, fill=color,
-                              outline="", tags="body")
-        if r <= 0:
+        w, h = (x2 - x1 + 1), (y2 - y1 + 1)
+        if w < 4 or h < 4:
             return
-        for corner, (px, py) in self._corner_spots.items():
-            img = _corner_image(r, corner, color, self._bg)
-            self._corner_refs[corner] = img
-            self.create_image(px, py, image=img, anchor="nw", tags="body")
+        img = button_image(w, h, r, color, self._bg)
+        self._corner_refs["all"] = img
+        self.create_image(x1, y1, image=img, anchor="nw", tags="body")
         self.tag_lower("body")          # 文字要压在底色上面
 
     def _paint(self, color, duration=MOTION_FASTER):
@@ -1286,8 +1356,9 @@ class App:
         self.head.delete("hair")
         self.head.create_line(0, h - 1, w, h - 1, fill=BORDER, tags="hair")
         # 右上角两行要跟着窗口宽度走
-        self.head.coords(self._theme_win, w - 32, 30)
-        self.head.coords(self.lbl_state.item, w - 26, 62)
+        # 按钮右边缘跟内容右边界对齐；状态文字右边缘排在按钮左侧留 16px
+        self.head.coords(self._theme_win, w - 28, 34)
+        self.head.coords(self.lbl_state.item, w - 28, 82)
         # 可能换行的文字限制宽度，否则会顶出画布
         for lbl in (self.lbl_sources, self.lbl_alert):
             self.head.itemconfig(lbl.item, width=w - 52)
@@ -1311,8 +1382,12 @@ class App:
         # 标题下面一小段琥珀色，是整块头部唯一的彩色
         self.head.create_line(27, 62, 62, 62, fill=ACCENT, width=3,
                               capstyle="round")
+        # 状态文字跟 QQ 连接状态**同一行**（右对齐），不跟主题按钮挤一起。
+        # 「未开启」说的是监控开没开，主题按钮是界面偏好 —— 两者没关系，
+        # 并排放会让人以为「未开启」修饰的是旁边的按钮。分组要按语义，不是按
+        # 好不好对齐。
         self.lbl_state = CanvasLabel(self.head, self.head.create_text(
-            0, 62, anchor="e", text="", fill=MUTED, font=(FONT, 10)))
+            0, 82, anchor="e", text="", fill=MUTED, font=(FONT, 10)))
         self.lbl_conn = CanvasLabel(self.head, self.head.create_text(
             26, 82, anchor="w", text="● 正在检查 …", fill=TEXT,
             font=(FONT, 10)))
@@ -1342,7 +1417,7 @@ class App:
             # 传错了就会白混白，圆角直接看不出来。
             fill=SURFACE, fill_active=PRIMARY_S, background=SUNKEN,
             text_fill=TEXT)
-        self._theme_win = self.head.create_window(0, 30, anchor="e",
+        self._theme_win = self.head.create_window(0, 34, anchor="e",
                                                   window=self.btn_theme)
 
         # ---------------- 底部常驻操作栏 ----------------
