@@ -139,7 +139,7 @@ def pick_log_font():
 THEMES = {
     "light": {
         "BG":        "#F7F7F7",   # Fluent 底 #F3F3F3 再亮一点点
-        "CARD":      "#FFFFFF",
+        "CARD":      "#F7F7F7",   # = BG：内容区不再分卡片，靠留白分组
         "SUNKEN":    "#F2F2F2",   # 次级面：比底暗一档
         "BORDER":    "#E5E5E5",   # 分隔线，约 6% 黑
         "TEXT":      "#1A1A1A",   # 不用纯黑，纯黑在白底上太硬
@@ -154,13 +154,14 @@ THEMES = {
         "OK_S":      "#E6F4EA",
         "WARN_S":    "#FBF1E0",
         "BAD_S":     "#FBEAE8",
+          "SURFACE":   "#FFFFFF",   # 抬升面：底栏、按钮、表格
         "LOG_BG":    "#1F1F1F",
         "LOG_FG":    "#D6D6D6",
         "LOG_BAR":   "#3A3A3A",
     },
     "dark": {
         "BG":        "#1F1F1F",   # Fluent 深色底（官方是 #202020）
-        "CARD":      "#2A2A2A",   # 卡片亮一档 —— Fluent 就靠这个分层
+        "CARD":      "#1F1F1F",   # = BG：同上
         "SUNKEN":    "#191919",   # 次级面暗一档
         "BORDER":    "#363636",
         "TEXT":      "#EDEDED",   # 不用纯白，纯白在深底上发炫
@@ -175,6 +176,7 @@ THEMES = {
         "OK_S":      "#1B2A21",
         "WARN_S":    "#2A2418",
         "BAD_S":     "#2E1D1E",
+          "SURFACE":   "#2A2A2A",   # 抬升面（深色）
         "LOG_BG":    "#191919",
         "LOG_FG":    "#CFCFCF",
         "LOG_BAR":   "#333333",
@@ -224,7 +226,7 @@ def apply_theme(name):
     「重新着色」这条路 —— 见 App.rebuild_ui()。启动时则在建界面**之前**
     先调用这里，否则会先按默认主题闪一下。
     """
-    global THEME, BG, CARD, SUNKEN, BORDER, TEXT, MUTED
+    global THEME, BG, CARD, SUNKEN, BORDER, SURFACE, TEXT, MUTED
     global PRIMARY, PRIMARY_D, PRIMARY_S, ACCENT
     global OK_COLOR, WARN, BAD_COLOR, OK_S, WARN_S, BAD_S
     global LOG_BG, LOG_FG, LOG_BAR
@@ -235,6 +237,7 @@ def apply_theme(name):
     t = THEMES[THEME]
 
     BG, CARD, SUNKEN, BORDER = t["BG"], t["CARD"], t["SUNKEN"], t["BORDER"]
+    SURFACE = t["SURFACE"]
     TEXT, MUTED = t["TEXT"], t["MUTED"]
     PRIMARY, PRIMARY_D, PRIMARY_S = t["PRIMARY"], t["PRIMARY_D"], t["PRIMARY_S"]
     ACCENT = t["ACCENT"]
@@ -266,17 +269,59 @@ STATE_RUNNING = "running"
 #  界面小工具
 # --------------------------------------------------------------------------
 
-def make_card(parent, title=None, padx=16, pady=16):
-    """卡片：外面套一圈 1px 细边。返回 (外层容器, 内层内容区)。"""
-    outer = tk.Frame(parent, background=BORDER)
-    inner = tk.Frame(outer, background=CARD, padx=padx, pady=pady)
-    inner.pack(fill="both", expand=True, padx=1, pady=1)
+def make_card(parent, title=None, padx=0, pady=0, surface=False):
+    """一个内容分组。返回 (容器, 内容区) —— 两个是同一个，兼容旧调用写法。
+
+    **故意没有边框、没有卡片底。**
+
+    这是扒了三张真实应用截图之后改的：FluentTerminal 的设置页、Windows 11
+    自己的设置，分组全靠**留白 + 一个标题**，不靠框。DevToys 只在「一格格
+    的工具入口」那种地方用卡片，而且卡片是圆角 8px、比背景略亮、没有描边。
+
+    之前我给每个分组套一圈 1px 描边，一页叠七八个框，界面又重又碎 ——
+    这是整个界面最土的地方。
+    """
+    bg = SURFACE if surface else BG
+    inner = tk.Frame(parent, background=bg, padx=padx, pady=pady)
     if title:
-        # 标题用正文色而不是主色：Windows 11 设置里的分组标题就是加粗深色，
-        # 不是彩色的。彩色标题会让每个卡片都在喊"看我"。
-        tk.Label(inner, text=title, background=CARD, foreground=TEXT,
-                 font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 12))
-    return outer, inner
+        tk.Label(inner, text=title, background=bg, foreground=TEXT,
+                 font=(FONT, 11, "bold")).pack(anchor="w", pady=(0, 16))
+    return inner, inner
+
+
+def page_title(parent, text, hint=""):
+    """标签页大标题。参考 FluentTerminal：常规字重，左对齐，下面留白。"""
+    box = tk.Frame(parent, background=BG)
+    box.pack(fill="x", pady=(0, 20))
+    tk.Label(box, text=text, background=BG, foreground=TEXT,
+             font=(FONT, 20)).pack(anchor="w")
+    if hint:
+        tk.Label(box, text=hint, background=BG, foreground=MUTED,
+                 font=(FONT, 9), anchor="w", justify="left").pack(
+            anchor="w", pady=(4, 0))
+    return box
+
+
+def toggle_row(parent, variable, text, pady=(0, 0), grid=None,
+               background=None, font=None, command=None):
+    """一行「胶囊开关 + 说明文字」。
+
+    布局跟以前 tk.Checkbutton 那会儿一样（左开关、右文字），但控件换成了
+    Windows 11 那种胶囊滑块 —— 那是整个界面里最一眼可辨的 Windows 元素，
+    方框打勾会立刻显得像十年前的软件。
+    """
+    bg = background or BG
+    box = tk.Frame(parent, background=bg)
+    if grid:
+        box.grid(row=grid[0], column=grid[1], sticky="w", pady=pady)
+    else:
+        box.pack(anchor="w", fill="x", pady=pady)
+    ToggleSwitch(box, variable, background=bg, command=command).pack(
+        side="left", pady=(1, 0))
+    tk.Label(box, text=text, background=bg, foreground=TEXT,
+             font=font or (FONT, 9), anchor="w", justify="left",
+             wraplength=690).pack(side="left", padx=(12, 0))
+    return box
 
 
 def card_hint(parent, text, wraplength=790, indent=0, pady=(6, 0)):
@@ -415,6 +460,87 @@ class CanvasLabel:
         return self.canvas.itemcget(self.item, "text") if key == "text" else ""
 
 
+def rgb(hex_color):
+    """'#rrggbb' -> (r, g, b)。"""
+    h = hex_color.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+_CORNER_ALPHA = {}          # (r, corner) -> 覆盖率矩阵，只跟半径和角有关
+_CORNER_IMG = {}            # (r, corner, fill, bg) -> PhotoImage
+_CORNER_IMG_CAP = 240       # 动画每帧一个颜色，得封顶不然会一直涨
+
+
+def _corner_alpha(r, corner):
+    """r×r 的圆角块里，每个像素被圆盖住的比例（0..1）。
+
+    用 4×4 超采样：每个像素取 16 个样本点，数有多少个落在圆内。
+    一次性算好缓存起来，跟颜色无关 —— 换颜色时直接拿这份覆盖率去混色。
+    """
+    key = (r, corner)
+    hit = _CORNER_ALPHA.get(key)
+    if hit is not None:
+        return hit
+    # 四个角，圆心在各自小方块的哪个位置
+    cx, cy = {"tl": (r, r), "tr": (0.0, r),
+              "bl": (r, 0.0), "br": (0.0, 0.0)}[corner]
+    rr = float(r) * r
+    out = []
+    for y in range(r):
+        row = []
+        for x in range(r):
+            n = 0
+            for sy in range(4):
+                for sx in range(4):
+                    px = x + (sx + 0.5) / 4.0
+                    py = y + (sy + 0.5) / 4.0
+                    if (px - cx) ** 2 + (py - cy) ** 2 <= rr:
+                        n += 1
+            row.append(n / 16.0)
+        out.append(row)
+    _CORNER_ALPHA[key] = out
+    return out
+
+
+def _corner_image(r, corner, fill, background):
+    """一个抗锯齿的圆角块。
+
+    为什么要这么麻烦：**tkinter 的 Canvas 不做抗锯齿**。用「矩形 + 椭圆」拼
+    出来的圆角是硬边的，半径一大，四个角就是肉眼可见的台阶 —— 看着像马赛克。
+
+    这里改成逐像素算覆盖率，再把边缘像素跟背景色按比例混一下，就等于把
+    抗锯齿烘焙进了图片。只画四个 r×r 的小角，中间照旧用矩形填，
+    所以每次重绘只有几百个像素，动画也扛得住。
+    """
+    key = (r, corner, fill, background)
+    img = _CORNER_IMG.get(key)
+    if img is not None:
+        return img
+
+    alpha = _corner_alpha(r, corner)
+    fc, bc = rgb(fill), rgb(background)
+    img = tk.PhotoImage(width=r, height=r)
+    rows = []
+    for y in range(r):
+        cells = []
+        for x in range(r):
+            a = alpha[y][x]
+            if a >= 0.999:
+                cells.append(fill)
+            elif a <= 0.001:
+                cells.append(background)
+            else:
+                cells.append("#%02x%02x%02x" % tuple(
+                    int(round(bc[i] + (fc[i] - bc[i]) * a)) for i in range(3)))
+        rows.append("{" + " ".join(cells) + "}")
+    img.put(" ".join(rows))
+
+    if len(_CORNER_IMG) >= _CORNER_IMG_CAP:
+        _CORNER_IMG.clear()
+    _CORNER_IMG[key] = img
+    return img
+
+
 class RoundedButton(tk.Canvas):
     """圆角按钮。
 
@@ -427,7 +553,7 @@ class RoundedButton(tk.Canvas):
 
     def __init__(self, parent, text, command, font_spec, height=88,
                  radius=20, fill=PRIMARY, fill_active=PRIMARY_D,
-                 background=BG, width=None):
+                 background=BG, width=None, text_fill="#FFFFFF"):
         super().__init__(parent, height=height, background=background,
                          highlightthickness=0, bd=0, cursor="hand2")
         if width:
@@ -435,11 +561,15 @@ class RoundedButton(tk.Canvas):
         self._text = text
         self._command = command
         self._font = font_spec
+        self._text_fill = text_fill
         self._radius = radius
         self._base = fill
         self._active = fill_active
         self._cur = fill
-        self._shape = []
+        self._bg = background          # 四角抗锯齿要拿它跟底色混
+        self._radius_used = radius
+        self._corner_refs = {}         # PhotoImage 引用，被 GC 就白画了
+        self._corner_spots = {}
         self._label = None
         self._enabled = True
         self._anim = Animator(self)
@@ -461,19 +591,31 @@ class RoundedButton(tk.Canvas):
             return
         r = max(0, min(self._radius, h // 2 - 1))
         x1, y1, x2, y2 = 1, 1, w - 1, h - 1
-        kw = {"outline": "", "fill": self._base}
         self.delete("all")
-        self._shape = [
-            self.create_oval(x1, y1, x1 + 2 * r, y1 + 2 * r, **kw),
-            self.create_oval(x2 - 2 * r, y1, x2, y1 + 2 * r, **kw),
-            self.create_oval(x1, y2 - 2 * r, x1 + 2 * r, y2, **kw),
-            self.create_oval(x2 - 2 * r, y2 - 2 * r, x2, y2, **kw),
-            self.create_rectangle(x1 + r, y1, x2 - r, y2, **kw),
-            self.create_rectangle(x1, y1 + r, x2, y2 - r, **kw),
-        ]
+        self._corner_spots = {
+            "tl": (x1, y1), "tr": (x2 - r, y1),
+            "bl": (x1, y2 - r), "br": (x2 - r, y2 - r),
+        }
+        self._corner_refs = {}          # 必须留引用，PhotoImage 被 GC 就白画了
+        self._draw_body(r, x1, y1, x2, y2, self._cur)
         self._label = self.create_text((x1 + x2) // 2, (y1 + y2) // 2,
-                                       text=self._text, fill="white",
+                                       text=self._text, fill=self._text_fill,
                                        font=self._font)
+
+    def _draw_body(self, r, x1, y1, x2, y2, color):
+        """中间用矩形（不需要抗锯齿），四个角换成抗锯齿小图。"""
+        self.delete("body")
+        self.create_rectangle(x1 + r, y1, x2 - r, y2, fill=color,
+                              outline="", tags="body")
+        self.create_rectangle(x1, y1 + r, x2, y2 - r, fill=color,
+                              outline="", tags="body")
+        if r <= 0:
+            return
+        for corner, (px, py) in self._corner_spots.items():
+            img = _corner_image(r, corner, color, self._bg)
+            self._corner_refs[corner] = img
+            self.create_image(px, py, image=img, anchor="nw", tags="body")
+        self.tag_lower("body")          # 文字要压在底色上面
 
     def _paint(self, color, duration=MOTION_FASTER):
         """把按钮底色过渡到 color。
@@ -492,8 +634,9 @@ class RoundedButton(tk.Canvas):
         def frame(t):
             c = mix(start, color, t)
             self._cur = c
-            for item in self._shape:
-                self.itemconfig(item, fill=c)
+            # 四角是图片，换色得重画 —— 只有 r×r 那么大，重画代价可以忽略
+            self._draw_body(self._radius_used, 1, 1,
+                            self.winfo_width() - 1, self.winfo_height() - 1, c)
 
         self._anim.run("color", duration, frame)
 
@@ -586,13 +729,158 @@ class TabStrip(tk.Frame):
             return
         start = self._bar.winfo_x()
         start_w = max(self._bar.winfo_width(), 1)
-        self._anim.run("bar", MOTION_FAST,
-                       lambda t: self._bar.place_configure(
-                           x=int(start + (x - start) * t),
-                           width=int(start_w + (w - start_w) * t)))
+        # 指示条滑过去也用弹簧，收尾带一点回弹 —— 这就是 Expressive 的味道
+        Spring(SPRING_SPATIAL).drive(
+            self, lambda t: self._bar.place_configure(
+                x=int(start + (x - start) * t),
+                width=int(start_w + (w - start_w) * t)))
 
     def dispose(self):
         self._anim.cancel()
+
+
+class ToggleSwitch(tk.Canvas):
+    """Windows 11 那种胶囊开关。
+
+    为什么不用 tk.Checkbutton：Windows 11 的开关是**胶囊滑块**，不是方框打勾。
+    这是整个界面里最容易被一眼认出来的 Windows 元素 —— 用方框打勾会立刻
+    显得像十年前的软件。
+
+    对外接口跟 Checkbutton 一样收一个 BooleanVar，所以换控件不用动逻辑。
+    """
+
+    W, H, KNOB = 40, 20, 14
+
+    def __init__(self, parent, variable, background=None, command=None):
+        super().__init__(parent, width=self.W, height=self.H,
+                         background=background or BG, highlightthickness=0,
+                         bd=0, cursor="hand2")
+        self.var = variable
+        self.command = command
+        self._t = 1.0 if variable.get() else 0.0        # 0=关 1=开
+        self._anim = Animator(self)
+        self.bind("<Button-1>", self._click)
+        # 外部改了变量（比如 _cfg_to_ui 回填配置）也要跟着动
+        self._trace = variable.trace_add("write", lambda *a: self._sync())
+        self._draw()
+
+    def _click(self, _event=None):
+        self.var.set(not self.var.get())
+        if self.command:
+            self.command()
+
+    def _sync(self):
+        target = 1.0 if self.var.get() else 0.0
+        if abs(target - self._t) < 0.01:
+            return
+        start = self._t
+        # 位移用 spatial 弹簧：会冲过目标再弹回来，那个回弹就是 M3 Expressive
+        # 要的生命力。缓动函数做不出这个，因为它只保证「停在终点」。
+        Spring(SPRING_SPATIAL).drive(
+            self, lambda t: self._set(start + (target - start) * t))
+
+    def _set(self, t):
+        self._t = t
+        self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        t = self._t
+        r = self.H // 2
+        track = mix(MUTED, PRIMARY, t)
+        # 胶囊轨道 = 左右两个半圆 + 中间一个矩形
+        self.create_oval(0, 0, self.H, self.H, fill=track, outline="")
+        self.create_oval(self.W - self.H, 0, self.W, self.H,
+                         fill=track, outline="")
+        self.create_rectangle(r, 0, self.W - r, self.H, fill=track, outline="")
+        pad = (self.H - self.KNOB) / 2.0
+        x = pad + (self.W - self.H) * t
+        self.create_oval(x, pad, x + self.KNOB, pad + self.KNOB,
+                         fill="#FFFFFF", outline="")
+
+    def dispose(self):
+        self._anim.cancel()
+        try:
+            self.var.trace_remove("write", self._trace)
+        except Exception:
+            pass
+
+
+# M3 Expressive 的弹簧 token，参数抄自官方（不是我调的）：
+#     expressiveSpatialFast     damping 0.6  stiffness 800   ← 最弹的一个
+#     expressiveSpatialDefault  damping 0.8  stiffness 380
+#     expressiveEffectsFast     damping 1.0  stiffness 3800  ← 不弹，只求快
+#
+# 官方还有一句话很关键：**效果类动画两套方案的参数完全一样** ——
+# 「表现力属于移动，不属于颜色」。所以：
+#     位置、尺寸、滑块  → 用 spatial（会弹，有生命力）
+#     颜色、透明度      → 用 effects（不弹，弹了反而眼花）
+SPRING_SPATIAL = (0.6, 800.0)
+SPRING_SPATIAL_SOFT = (0.8, 380.0)
+SPRING_EFFECTS = (1.0, 3800.0)
+
+
+class Spring:
+    """M3 的弹簧模拟。
+
+    这是 Material 3 Expressive 最核心的东西 —— 它的动效不是贝塞尔曲线，
+    是**物理弹簧**。damping 小于 1 时会**冲过目标再弹回来**，那个"回弹"
+    就是 Expressive 想要的"有生命力"的感觉，缓动函数给不了。
+
+    数值积分用最朴素的显式欧拉，60fps 下看不出误差。
+    """
+
+    def __init__(self, token):
+        damping, stiffness = token
+        self.m = 1.0
+        self.k = float(stiffness)
+        self.c = 2.0 * damping * math.sqrt(self.k * self.m)
+
+    def drive(self, widget, on_frame, on_done=None, velocity=0.0):
+        """从 0 跑到 1。on_frame 收到的进度**可能大于 1**（过冲），也可能小于 0。
+
+        调用方得自己决定怎么处理过冲：滑块位置过冲很好看，颜色过冲会算出
+        非法颜色值，所以颜色那条路要用 SPRING_EFFECTS（damping=1，不过冲）。
+        """
+        state = {"x": 0.0, "v": velocity}
+        frame_ms = 16
+        # **子步长不能省。** 显式积分在高刚度下会发散：stiffness 3800 时阻尼系数
+        # c = 2*sqrt(k) ≈ 123，按 1/60 秒积分的话 c*dt ≈ 2.06 > 2，一步就翻号，
+        # 数值直接爆到 1e20（实测踩到过）。固定用 1/600 秒积分、每帧跑若干子步，
+        # c*dt 降到 0.2 左右，稳稳收敛。
+        sub_dt = 1.0 / 600.0
+        per_frame = max(1, int(round((frame_ms / 1000.0) / sub_dt)))
+
+        def step():
+            x, v = state["x"], state["v"]
+            for _ in range(per_frame):
+                a = (-self.k * (x - 1.0) - self.c * v) / self.m
+                v += a * sub_dt
+                x += v * sub_dt
+            state["x"], state["v"] = x, v
+            if not (abs(x) < 10.0 and abs(v) < 1e4):      # 兜底：真炸了就直接落位
+                try:
+                    on_frame(1.0)
+                except tk.TclError:
+                    pass
+                if on_done:
+                    on_done()
+                return
+            try:
+                on_frame(x)
+            except tk.TclError:
+                return
+            if abs(x - 1.0) < 0.002 and abs(v) < 0.02:
+                try:
+                    on_frame(1.0)
+                except tk.TclError:
+                    pass
+                if on_done:
+                    on_done()
+                return
+            widget.after(frame_ms, step)
+
+        step()
 
 
 class Animator:
@@ -949,7 +1237,7 @@ class App:
                   foreground=[("selected", PRIMARY)])
 
         # 表格
-        style.configure("Treeview", background=CARD, fieldbackground=CARD,
+        style.configure("Treeview", background=SURFACE, fieldbackground=SURFACE,
                         foreground=TEXT, rowheight=28, borderwidth=0,
                         font=(FONT, 9))
         style.configure("Treeview.Heading", background=SUNKEN,
@@ -998,12 +1286,12 @@ class App:
         self.head.delete("hair")
         self.head.create_line(0, h - 1, w, h - 1, fill=BORDER, tags="hair")
         # 右上角两行要跟着窗口宽度走
-        self.head.coords(self._theme_win, w - 26, 32)
+        self.head.coords(self._theme_win, w - 32, 30)
         self.head.coords(self.lbl_state.item, w - 26, 62)
         # 可能换行的文字限制宽度，否则会顶出画布
         for lbl in (self.lbl_sources, self.lbl_alert):
             self.head.itemconfig(lbl.item, width=w - 52)
-        self.btn_theme.config(text="☀  浅色" if THEME == "dark" else "☾  深色")
+        self.btn_theme.config(text="浅色模式" if THEME == "dark" else "深色模式")
 
     def _build_ui(self):
         self._setup_style()
@@ -1043,18 +1331,19 @@ class App:
         #     文字往里推，于是「浅色」比下一行的「未开启」缩进了 8px —— 看着
         #     就是没对齐。加了边框之后，按钮的**右边缘**跟「未开启」的右边缘
         #     对齐；同时也一眼看得出这是个能点的按钮，而不是一行说明文字。
-        self.btn_theme = tk.Label(
-            self.head, text="", background=CARD, foreground=TEXT,
-            font=(FONT, 9), cursor="hand2", padx=12, pady=4,
-            bd=0, highlightthickness=1, highlightbackground=BORDER,
-            highlightcolor=PRIMARY)
-        self._theme_win = self.head.create_window(0, 32, anchor="e",
+        # 用胶囊按钮而不是描边方块：界面别处全圆角了，它是方的就格格不入。
+        # 另外文字里**不要放 ☾ / ☀ 这类符号** —— 微软雅黑下那个月亮渲染成了
+        # 一个怪模怪样的 C，看着像坏了。就用纯文字。
+        self.btn_theme = RoundedButton(
+            self.head, text="", command=self.toggle_theme,
+            font_spec=(FONT, 9), height=28, radius=14, width=74,
+            # background 必须是**它实际坐着的那个面**（头部是 SUNKEN），
+            # 不是它自己的填充色 —— 抗锯齿的圆角是拿这个颜色去混的，
+            # 传错了就会白混白，圆角直接看不出来。
+            fill=SURFACE, fill_active=PRIMARY_S, background=SUNKEN,
+            text_fill=TEXT)
+        self._theme_win = self.head.create_window(0, 30, anchor="e",
                                                   window=self.btn_theme)
-        self.btn_theme.bind("<Button-1>", lambda e: self.toggle_theme())
-        self.btn_theme.bind("<Enter>",
-                            lambda e: self.btn_theme.config(background=PRIMARY_S))
-        self.btn_theme.bind("<Leave>",
-                            lambda e: self.btn_theme.config(background=CARD))
 
         # ---------------- 底部常驻操作栏 ----------------
         # 整个界面最「Apple Music」的一处：主操作不放顶部那个巨大的色块里，
@@ -1063,32 +1352,32 @@ class App:
         # 标签页它都还在那儿，不用滚回去找。
         #
         # pack 顺序有意为之：先占住底边，中间那块再用 expand 填满剩下的空间。
-        bar = tk.Frame(self.root, background=CARD)
+        bar = tk.Frame(self.root, background=SURFACE)
         bar.pack(side="bottom", fill="x")
         tk.Frame(bar, background=BORDER, height=1).pack(fill="x")   # 发丝分隔线
 
-        inner = tk.Frame(bar, background=CARD)
+        inner = tk.Frame(bar, background=SURFACE)
         inner.pack(fill="x", padx=24, pady=16)
 
-        left = tk.Frame(inner, background=CARD)
+        left = tk.Frame(inner, background=SURFACE)
         left.pack(side="left", fill="both", expand=True)
 
         # 状态行：一个圆点 + 一行字。圆点在监控中会呼吸（见 _pulse_dot），
         # 不监控时是静止的中灰 —— 一眼就能看出「它到底在不在干活」。
-        row = tk.Frame(left, background=CARD)
+        row = tk.Frame(left, background=SURFACE)
         row.pack(anchor="w", fill="x")
-        self.dot = tk.Canvas(row, width=14, height=14, background=CARD,
+        self.dot = tk.Canvas(row, width=14, height=14, background=SURFACE,
                              highlightthickness=0, bd=0)
         self.dot.pack(side="left", padx=(0, 8), pady=(2, 0))
         self._dot = self.dot.create_oval(3, 3, 11, 11, fill=MUTED, outline="")
 
         self.lbl_hotkey_hint = tk.Label(
             row, justify="left", anchor="w", font=(FONT, 11, "bold"),
-            background=CARD, foreground=OK_COLOR, bd=0, wraplength=580)
+            background=SURFACE, foreground=OK_COLOR, bd=0, wraplength=580)
         self.lbl_hotkey_hint.pack(side="left", anchor="w")
 
         self.lbl_tip = tk.Label(
-            left, justify="left", anchor="w", font=(FONT, 9), background=CARD,
+            left, justify="left", anchor="w", font=(FONT, 9), background=SURFACE,
             foreground=MUTED, wraplength=600,
             text="点一下就开始，之后一直挂着就行。"
                  "程序跑在独立的 QQ 副本上，你自己聊天的 QQ 不受影响。")
@@ -1096,8 +1385,8 @@ class App:
 
         self.btn_main = RoundedButton(
             inner, text="开始直播通知", command=self.toggle_main,
-            font_spec=(FONT, 14, "bold"), height=48, radius=12, width=200,
-            fill=PRIMARY, fill_active=PRIMARY_D, background=CARD)
+            font_spec=(FONT, 14, "bold"), height=48, radius=24, width=210,
+            fill=PRIMARY, fill_active=PRIMARY_D, background=SURFACE)
         self.btn_main.pack(side="right", padx=(24, 0))
 
         # ---------------- 标签栏 + 内容区 ----------------
@@ -1151,11 +1440,15 @@ class App:
         if not (animate and changed):
             return
         page = self._pages[index]
-        inner = page.winfo_children()
-        inner = inner[0] if inner else None
+        kids = page.winfo_children()
+        inner = kids[0] if kids else None
         if inner is None:
             return
-        base = int(inner.cget("pady")) or 16
+        # cget 有时回的是 Tcl_Obj 而不是数字，直接 int() 会炸 —— 先转字符串再取
+        try:
+            base = int(str(inner.cget("pady")).strip().split()[0])
+        except (ValueError, IndexError, tk.TclError):
+            base = 16
 
         def frame(t):
             try:
@@ -1342,11 +1635,9 @@ class App:
         self.var_obs.trace_add("write", lambda *a: self._refresh_hotkey_hint())
 
         def check(parent, var, text, bold=True):
-            tk.Checkbutton(parent, variable=var, text=text, background=CARD,
-                           foreground=TEXT, activebackground=CARD,
-                           font=(FONT, 10 if bold else 9, "bold" if bold else "normal"),
-                           anchor="w", selectcolor=CARD,
-                           highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
+            """一行「胶囊开关 + 说明」—— 代替原来的 tk.Checkbutton。"""
+            return toggle_row(parent, var, text, font=(
+                FONT, 10 if bold else 9, "bold" if bold else "normal"))
 
         # ① 直播间轮询 —— 最通用
         outer, card = make_card(page, "开播时通知　勾选任意一种即可，可多选")
@@ -1407,11 +1698,9 @@ class App:
         ttk.Entry(tplrow, textvariable=self.var_offline_tpl,
                   font=(FONT, 9)).pack(fill="x")
 
-        tk.Checkbutton(off, variable=self.var_offline_at,
-                       text="@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）",
-                       background=CARD, foreground=TEXT, activebackground=CARD,
-                       anchor="w", selectcolor=CARD, highlightthickness=0,
-                       bd=0, cursor="hand2").pack(anchor="w", pady=(11, 0))
+        toggle_row(off, self.var_offline_at,
+                   "@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）",
+                   pady=(11, 0))
         card_hint(off, "防误报：状态转离线后先等 60 秒复核，期间恢复直播就取消；"
                        "轮播状态不会触发下播。", pady=(7, 0))
 
@@ -1455,7 +1744,7 @@ class App:
         ttk.Entry(grid, textvariable=self.var_link, font=(FONT, 9)).grid(
             row=1, column=1, sticky="we", pady=(0, 12))
         row_label(2, "开播文案", top=True)
-        self.txt_tpl = tk.Text(grid, height=6, wrap="word", font=(FONT, 9),
+        self.txt_tpl = tk.Text(grid, height=8, width=64, wrap="word", font=(FONT, 9),
                                background=SUNKEN, foreground=TEXT,
                                relief="flat", bd=0,
                                highlightthickness=1,
@@ -1463,7 +1752,7 @@ class App:
                                highlightcolor=PRIMARY,
                                insertbackground=TEXT,
                                padx=8, pady=6)
-        self.txt_tpl.grid(row=2, column=1, sticky="we")
+        self.txt_tpl.grid(row=2, column=1, sticky="w")
         tk.Label(grid, text="可用占位符：{title} {link} {game} {time} {date}",
                  background=CARD, foreground=MUTED, font=(FONT, 8),
                  anchor="w").grid(row=3, column=1, sticky="w", pady=(8, 0))
@@ -1474,12 +1763,7 @@ class App:
 
         self.var_cover = tk.BooleanVar()
         self.var_cover_size = tk.StringVar()
-        tk.Checkbutton(grid, variable=self.var_cover,
-                       text="开播通知里带一张小封面图",
-                       background=CARD, foreground=TEXT, activebackground=CARD,
-                       font=(FONT, 9), anchor="w", selectcolor=CARD,
-                       highlightthickness=0, bd=0, cursor="hand2").grid(
-            row=5, column=1, sticky="w", pady=(9, 0))
+        toggle_row(grid, self.var_cover, "开播通知里带一张小封面图", pady=(9, 0), grid=(5, 1))
         tk.Label(grid, text="直接用你 B站直播间的封面，压到很小再发，只有几 KB",
                  background=CARD, foreground=MUTED, font=(FONT, 8),
                  anchor="w").grid(row=6, column=1, sticky="w", padx=(24, 0))
@@ -1492,11 +1776,7 @@ class App:
         self.var_game_change = tk.BooleanVar()
         self.var_game_ignore = tk.StringVar()
 
-        tk.Checkbutton(gcard, variable=self.var_game_on,
-                       text="自动识别当前在玩的游戏，写进通知里",
-                       background=CARD, foreground=TEXT, activebackground=CARD,
-                       font=(FONT, 10, "bold"), anchor="w", selectcolor=CARD,
-                       highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
+        toggle_row(gcard, self.var_game_on, "自动识别当前在玩的游戏，写进通知里")
         card_hint(gcard, "看当前窗口和直播姬/OBS 的场景配置，认不出来就不写这行。"
                          "全程本机读取，不截图、不上传任何画面。",
                   indent=24, pady=(3, 0))
@@ -1509,12 +1789,7 @@ class App:
                                       foreground=MUTED, font=(FONT, 9, "bold"))
         self.lbl_game_test.pack(side="left", padx=10)
 
-        tk.Checkbutton(gcard, variable=self.var_game_change,
-                       text="中途换游戏时补一条（不 @ 任何人）",
-                       background=CARD, foreground=TEXT, activebackground=CARD,
-                       font=(FONT, 9), anchor="w", selectcolor=CARD,
-                       highlightthickness=0, bd=0, cursor="hand2").pack(
-            anchor="w", pady=(11, 0))
+        toggle_row(gcard, self.var_game_change, "中途换游戏时补一条（不 @ 任何人）", pady=(11, 0))
 
         tk.Label(gcard, text="不算游戏的　填 exe 名，逗号分隔（比如虚拟形象软件）",
                  background=CARD, foreground=TEXT, font=(FONT, 9),
@@ -1531,11 +1806,7 @@ class App:
         self.var_reminder_max = tk.StringVar()
         self.var_reminder_tpl = tk.StringVar()
 
-        tk.Checkbutton(rcard, variable=self.var_reminder_on,
-                       text="开播一段时间后再提醒一次",
-                       background=CARD, foreground=TEXT, activebackground=CARD,
-                       font=(FONT, 10, "bold"), anchor="w", selectcolor=CARD,
-                       highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
+        toggle_row(rcard, self.var_reminder_on, "开播一段时间后再提醒一次")
         card_hint(rcard, "第一波没看到的人还有一次机会。只有在直播间确实还开着"
                          "的时候才会发。", indent=24, pady=(3, 0))
 
@@ -1606,11 +1877,7 @@ class App:
         boot_outer, boot = make_card(page, "启动行为")
         boot_outer.pack(fill="x", pady=(12, 0))
         self.var_autostart = tk.BooleanVar()
-        tk.Checkbutton(boot, variable=self.var_autostart,
-                       text="打开程序后自动开始监控（不用再点大按钮）",
-                       background=CARD, foreground=TEXT, activebackground=CARD,
-                       font=(FONT, 10, "bold"), anchor="w", selectcolor=CARD,
-                       highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
+        toggle_row(boot, self.var_autostart, "打开程序后自动开始监控（不用再点大按钮）")
         card_hint(boot, "勾上之后，双击图标就等于直接把监控开起来了——背后会自动拉起 "
                         "NapCat，大约 10 秒后就绪。只想改设置时建议别勾，"
                         "否则每次都白起一遍 NapCat。", indent=24, pady=(4, 0))

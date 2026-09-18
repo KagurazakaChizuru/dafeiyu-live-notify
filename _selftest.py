@@ -342,6 +342,53 @@ def run_redact_tests():
     return failures
 
 
+def run_corner_tests():
+    """圆角抗锯齿。
+
+    为什么值得一条常驻测试：**tkinter 的 Canvas 不做抗锯齿**。最省事的画法是
+    「两个矩形 + 四个椭圆」，但那样拼出来的圆角是硬边的，半径一大四个角就是
+    肉眼可见的台阶，像马赛克。
+
+    正确做法是逐像素算覆盖率再跟背景色混。这个测试断言「边缘存在半覆盖的
+    像素」—— 走回椭圆画法的话，覆盖率只会有 0 和 1，立刻红。
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    try:
+        import gui
+    except Exception as exc:
+        check("gui.py 能否导入", False, str(exc))
+        return failures
+
+    for r in (8, 12, 16):
+        alpha = gui._corner_alpha(r, "tl")
+        vals = [v for row in alpha for v in row]
+        partial = [v for v in vals if 0.001 < v < 0.999]
+        check("半径 {}：边缘有半覆盖像素（抗锯齿生效）".format(r),
+              len(partial) >= r // 2, "半覆盖像素只有 {} 个".format(len(partial)))
+        check("半径 {}：角落外面是全透明".format(r),
+              alpha[0][0] < 0.5, "左上角应该是空的，实际 {}".format(alpha[0][0]))
+        check("半径 {}：角落里面是全不透明".format(r),
+              alpha[r - 1][r - 1] > 0.99,
+              "右下角应该在圆内，实际 {}".format(alpha[r - 1][r - 1]))
+
+    # 覆盖率矩阵跟颜色无关，改颜色不该让它重算
+    before = gui._corner_alpha(12, "tl")
+    check("覆盖率矩阵被缓存复用", gui._corner_alpha(12, "tl") is before)
+
+    # 四个角形状不同（TR 应该是右上角贴边）
+    tl, tr = gui._corner_alpha(12, "tl"), gui._corner_alpha(12, "tr")
+    check("四个角不是同一个形状", tl[0][0] < 0.5 and tr[0][11] < 0.5,
+          "tl[0][0]={} tr[0][11]={}".format(tl[0][0], tr[0][11]))
+    return failures
+
+
 def main():
     live_notify._setup_console()          # 先切 UTF-8，否则中文输出会乱码
     path = make_config()
@@ -370,19 +417,24 @@ def main():
     failures = run_engine_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 5/7  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("# 5/8  游戏识别（纯逻辑，不要求有游戏在跑）")
     print("#" * 70)
     failures += run_games_tests()
 
     print("\n" + "#" * 70)
-    print("# 6/7  群发失败重试")
+    print("# 6/8  群发失败重试")
     print("#" * 70)
     failures += run_send_retry_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 7/7  日志落盘前的密钥打码")
+    print("# 7/8  日志落盘前的密钥打码")
     print("#" * 70)
     failures += run_redact_tests()
+
+    print("\n" + "#" * 70)
+    print("# 8/8  圆角抗锯齿")
+    print("#" * 70)
+    failures += run_corner_tests()
 
     print("\n" + "=" * 70)
     print("命令退出码：check={check}  test={test}  send={send}".format(**results))
