@@ -14,6 +14,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 放在最前面：这个坑会让脚本「能跑但结果是错的」，比直接报错更难查。
+      #   .bat  必须纯 ASCII（cmd 按 OEM 代码页读，中文会让字节偏移错位）
+      #   .ps1  要么纯 ASCII，要么带 BOM。中文 + 无 BOM 时 PowerShell 5.1
+      #         按 ANSI 解码，奇数个高位字节会吃掉行尾换行，下一行代码
+      #         变成注释 —— 静默失效。_package.ps1 就这样丢过一次变量赋值。
+      - name: 脚本编码检查
+        shell: pwsh
+        run: |
+          $bad = @()
+          Get-ChildItem -Recurse -File -Include *.bat,*.ps1 |
+            Where-Object { $_.FullName -notmatch '\\\.git\\' } |
+            ForEach-Object {
+              $b = [System.IO.File]::ReadAllBytes($_.FullName)
+              if (($b | Where-Object { $_ -gt 127 }).Count -eq 0) { return }
+              $bom = ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
+              if (-not $bom) { $bad += $_.FullName }
+            }
+          if ($bad.Count -gt 0) {
+            $bad | ForEach-Object { Write-Host "::error file=$_::有非 ASCII 字节但没有 BOM" }
+            exit 1
+          }
+          Write-Host "编码检查通过"
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'

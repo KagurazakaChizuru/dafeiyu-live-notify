@@ -1,12 +1,15 @@
 ﻿# ===========================================================================
-#  生成 GitHub Social preview 图（1280 x 640）
+#  生成头图（1280 x 640）
 # ===========================================================================
-#  GitHub 的 social preview **没有 API**，只能在仓库 Settings 里手动上传。
-#  这个脚本负责把图生成出来，省得每次重做。
+#  这一个文件同时用在两个地方：
+#    1. README 最上面的头图
+#    2. GitHub 仓库的 Social preview（别人分享链接时显示的那张卡片）
+#
+#  Social preview **没有 API**，只能在仓库 Settings 里手动上传：
+#      Settings -> Social preview -> Upload an image
 #
 #  用法：
 #      powershell -ExecutionPolicy Bypass -File _build/_makesocial.ps1
-#      然后到 Settings -> Social preview -> Upload an image
 #
 #  依赖 Windows 自带的 GDI+，不需要 Pillow。
 #
@@ -16,7 +19,7 @@
 
 param(
     [string]$Icon  = "$PSScriptRoot\app.ico",
-    [string]$Out   = "$PSScriptRoot\social-preview.png"
+    [string]$Out   = "$PSScriptRoot\..\docs\images\banner.png"
 )
 
 $ErrorActionPreference = 'Stop'

@@ -53,7 +53,16 @@ if (-not $Out) {
 }
 $Out = [System.IO.Path]::GetFullPath($Out)
 
-$folderName = "dafeiyu-live-notify-v$Version"
+# The root folder inside the zip carries NO version number, on purpose:
+# Scoop's extract_dir does not do $version substitution, so a versioned folder
+# would force a manifest edit on every release. The version still lives in the
+# zip filename, the Release page and the CHANGELOG.
+#
+# Do NOT put Chinese in this file. PowerShell 5.1 decodes BOM-less scripts as
+# ANSI; an odd number of high bytes on a line swallows the trailing newline and
+# the next line of real code turns into a comment. That already happened once
+# here, silently.
+$folderName = 'dafeiyu-live-notify'
 Write-Host "version : $Version"
 Write-Host "exe     : $Exe"
 Write-Host "output  : $Out"

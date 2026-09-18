@@ -1,5 +1,7 @@
 # 大肥鱼直播姬
 
+![大肥鱼直播姬](docs/images/banner.png)
+
 [![Release](https://img.shields.io/github/v/release/KagurazakaChizuru/dafeiyu-live-notify?color=2F5FA8&label=release)](https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/latest)
 [![License](https://img.shields.io/github/license/KagurazakaChizuru/dafeiyu-live-notify?color=2F5FA8)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-2F5FA8)](#)
@@ -7,10 +9,24 @@
 [![Dependencies](https://img.shields.io/badge/dependencies-0-1E7A4D)](#)
 
 **你开播时，它自动往 QQ 群发一条 `@全体成员`，顺便告诉群友你正在玩什么。**
+不需要点任何按钮，挂着就行；下播时再发一条。
+
+### ⬇️ [点这里下载最新版](https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/latest)
+
+Windows 10 / 11 · 免安装 · 不用装 Python · 解压就能跑
+
+也可以让包管理器装：
+
+```powershell
+# Scoop（现在就能用）
+scoop bucket add dafeiyu https://github.com/KagurazakaChizuru/dafeiyu-live-notify
+scoop install dafeiyu/dafeiyu-live-notify
+
+# winget（清单已通过本地校验，正在提交到 winget-pkgs）
+winget install KagurazakaChizuru.DafeiyuLiveNotify
+```
 
 ![界面](docs/images/screenshot.png)
-
-不需要点任何按钮，挂着就行。下播时再发一条。
 
 ---
 
