@@ -16,6 +16,7 @@ NapCat 的启动和关闭完全由本程序负责，不需要手动开任何东�
 """
 
 import json
+import math
 import os
 import queue
 import re
@@ -99,52 +100,118 @@ def pick_log_font():
 #  语义色一律用 Apple 原值（systemBlue / Green / Orange / Red），
 #  深色模式用它们的 dark 变体 —— 这也是 Apple 自己的规矩：
 #  同一个语义色在深浅两套里是两个不同的值，不是一个值加透明度。
+  # --------------------------------------------------------------------------
+  #  配色 —— Fluent 的分层骨架 + 降对比
+  # --------------------------------------------------------------------------
+  #  这是第四版配色了，前几版的教训：
+  #    · 冷蓝灰 → 像工程软件
+  #    · 高饱和紫渐变 + 巨大按钮 → 吵
+  #    · Apple Music 那一版结构对了，但**颜色照搬了 Apple**
+  #
+  #  最后一条是问题所在：Apple 深色模式的底是**纯黑 #000000**、浅色卡片是
+  #  **纯白 #FFFFFF**，纯黑配纯白对比过强 —— 那正是「刺眼」的来源。而 Windows
+  #  走的是另一条路（官方叫 Fluent）：底色 #202020、卡片 #2B2B2B，靠**亮度差**
+  #  分层，不用极值。
+  #
+  #  所以这一版：**结构照 Fluent，颜色在 Fluent 基础上再降一档对比** ——
+  #  正文不用纯黑纯白，次要文字统一压到中灰，分隔线淡到几乎看不见。
+  #
+  #  动效的时长和缓动也不是我编的，见 MOTION_* 和 ease_* 的注释。
+# --------------------------------------------------------------------------
+#  配色 —— Fluent 的分层骨架 + 降对比
+# --------------------------------------------------------------------------
+#  这是第四版配色了，前几版的教训：
+#    · 冷蓝灰 → 像工程软件
+#    · 高饱和紫渐变 + 巨大按钮 → 吵
+#    · Apple Music 那一版结构对了，但**颜色照搬了 Apple**
+#
+#  最后一条是问题所在：Apple 深色模式的底是**纯黑 #000000**、浅色卡片是
+#  **纯白 #FFFFFF**，纯黑配纯白对比过强 —— 那正是「刺眼」的来源。而 Windows
+#  走的是另一条路（官方叫 Fluent）：底色 #202020、卡片 #2B2B2B，靠**亮度差**
+#  分层，不用极值。
+#
+#  所以这一版：**结构照 Fluent，颜色在 Fluent 基础上再降一档对比** ——
+#  正文不用纯黑纯白，次要文字统一压到中灰，分隔线淡到几乎看不见。
+#
+#  动效的时长和缓动也不是我编的，见 MOTION_* 和 ease_* 的注释。
 # --------------------------------------------------------------------------
 
 THEMES = {
     "light": {
-        "BG":        "#F2F2F7",   # systemGroupedBackground
-        "CARD":      "#FFFFFF",   # systemBackground
-        "SUNKEN":    "#F2F2F7",
-        "BORDER":    "#D8D8DC",   # separator
-        "TEXT":      "#000000",   # label
-        "MUTED":     "#8A8A8E",   # secondaryLabel
-        "PRIMARY":   "#007AFF",   # systemBlue
-        "PRIMARY_D": "#0063D1",
-        "PRIMARY_S": "#E5F0FF",
-        "ACCENT":    "#FF9500",   # systemOrange
-        "OK":        "#34C759",   # systemGreen
-        "WARN":      "#C86A00",   # systemOrange，但压暗到能在白底上读
-        "BAD":       "#FF3B30",   # systemRed
-        "OK_S":      "#E7F8EB",
-        "WARN_S":    "#FFF2E0",
-        "BAD_S":     "#FFEAE9",
-        "LOG_BG":    "#1C1C1E",
-        "LOG_FG":    "#E5E5EA",
-        "LOG_BAR":   "#3A3A3C",
+        "BG":        "#F7F7F7",   # Fluent 底 #F3F3F3 再亮一点点
+        "CARD":      "#FFFFFF",
+        "SUNKEN":    "#F2F2F2",   # 次级面：比底暗一档
+        "BORDER":    "#E5E5E5",   # 分隔线，约 6% 黑
+        "TEXT":      "#1A1A1A",   # 不用纯黑，纯黑在白底上太硬
+        "MUTED":     "#5F5F5F",   # Fluent 的 secondary text 档位
+        "PRIMARY":   "#2B7FD4",   # 系统蓝降饱和一档
+        "PRIMARY_D": "#2268B0",
+        "PRIMARY_S": "#E8F1FB",
+        "ACCENT":    "#D98A1F",   # 图标的琥珀色，压暗到能在白底读
+        "OK":        "#0F7B0F",
+        "WARN":      "#9D5D00",
+        "BAD":       "#C42B1C",   # Fluent light 的 system red
+        "OK_S":      "#E6F4EA",
+        "WARN_S":    "#FBF1E0",
+        "BAD_S":     "#FBEAE8",
+        "LOG_BG":    "#1F1F1F",
+        "LOG_FG":    "#D6D6D6",
+        "LOG_BAR":   "#3A3A3A",
     },
     "dark": {
-        "BG":        "#000000",   # Apple 深色的底就是纯黑
-        "CARD":      "#1C1C1E",   # secondarySystemBackground，比底亮一层
-        "SUNKEN":    "#1C1C1E",
-        "BORDER":    "#38383A",   # separator (dark)
-        "TEXT":      "#FFFFFF",
-        "MUTED":     "#8E8E93",   # secondaryLabel (dark)
-        "PRIMARY":   "#0A84FF",   # systemBlue (dark)
-        "PRIMARY_D": "#0A6FD6",
-        "PRIMARY_S": "#0A2540",
-        "ACCENT":    "#FF9F0A",   # systemOrange (dark)
-        "OK":        "#30D158",   # systemGreen (dark)
-        "WARN":      "#FF9F0A",
-        "BAD":       "#FF453A",   # systemRed (dark)
-        "OK_S":      "#0E2A18",
-        "WARN_S":    "#2A1F0A",
-        "BAD_S":     "#2A1210",
-        "LOG_BG":    "#1C1C1E",
-        "LOG_FG":    "#D1D1D6",
-        "LOG_BAR":   "#2C2C2E",
+        "BG":        "#1F1F1F",   # Fluent 深色底（官方是 #202020）
+        "CARD":      "#2A2A2A",   # 卡片亮一档 —— Fluent 就靠这个分层
+        "SUNKEN":    "#191919",   # 次级面暗一档
+        "BORDER":    "#363636",
+        "TEXT":      "#EDEDED",   # 不用纯白，纯白在深底上发炫
+        "MUTED":     "#A0A0A0",
+        "PRIMARY":   "#4CA0F0",   # 深色下提亮，否则发闷
+        "PRIMARY_D": "#3A82C8",
+        "PRIMARY_S": "#1E2A38",
+        "ACCENT":    "#E8A33D",
+        "OK":        "#6CCB8F",
+        "WARN":      "#E0A33D",
+        "BAD":       "#FF99A4",   # Fluent dark 的 system red
+        "OK_S":      "#1B2A21",
+        "WARN_S":    "#2A2418",
+        "BAD_S":     "#2E1D1E",
+        "LOG_BG":    "#191919",
+        "LOG_FG":    "#CFCFCF",
+        "LOG_BAR":   "#333333",
     },
 }
+
+# --------------------------------------------------------------------------
+#  动效
+# --------------------------------------------------------------------------
+#  时长和缓动抄自微软官方：
+#      https://learn.microsoft.com/windows/apps/design/motion/timing-and-easing
+#
+#      ControlNormalAnimationDuration   250ms   常规控件
+#      ControlFastAnimationDuration     167ms   悬停、聚焦
+#      ControlFasterAnimationDuration    83ms   按下等微反馈
+#
+#  缓动只有两条，而且**方向不能反**：
+#      进入用 cubic-bezier(0, 0, 0, 1) —— 快进慢停
+#      退出用 cubic-bezier(1, 0, 1, 1) —— 慢起快走
+#
+#  tkinter 没有 CSS transition，只能「每帧算一个新值 + after() 排下一帧」，
+#  所以下面用幂函数逼近那两条贝塞尔曲线。真正的三次贝塞尔要解方程，而这个
+#  逼近在 16ms 一帧的粒度下肉眼分不出来。
+MOTION_NORMAL = 250
+MOTION_FAST = 167
+MOTION_FASTER = 83
+FRAME_MS = 16                  # ≈60fps
+
+
+def ease_out(t):
+    """快进慢停，对应 cubic-bezier(0, 0, 0, 1)。用于**进入**。"""
+    return 1 - (1 - t) ** 3
+
+
+def ease_in(t):
+    """慢起快走，对应 cubic-bezier(1, 0, 1, 1)。用于**退出**。"""
+    return t ** 3
 
 THEME_NAMES = ("light", "dark")
 THEME = "light"
@@ -369,12 +436,15 @@ class RoundedButton(tk.Canvas):
         self._radius = radius
         self._base = fill
         self._active = fill_active
+        self._cur = fill
         self._shape = []
         self._label = None
         self._enabled = True
+        self._anim = Animator(self)
 
         self.bind("<Configure>", lambda e: self._redraw())
         self.bind("<Button-1>", self._on_click)
+        # 悬停和移开都走 83ms 过渡，不是硬切
         self.bind("<Enter>", lambda e: self._paint(self._active))
         self.bind("<Leave>", lambda e: self._paint(self._base))
 
@@ -403,12 +473,27 @@ class RoundedButton(tk.Canvas):
                                        text=self._text, fill="white",
                                        font=self._font)
 
-    def _paint(self, color):
+    def _paint(self, color, duration=MOTION_FASTER):
+        """把按钮底色过渡到 color。
+
+        Fluent 的两档时长在这里分工：
+          · 悬停 / 按下 —— MOTION_FASTER（83ms），要跟手
+          · 状态切换（开始 ↔ 停止）—— MOTION_NORMAL（250ms），要看得见
+
+        注意 _base 是「静止色」，_cur 是「当前显示色」：动画只改 _cur，
+        否则鼠标移开时会把目标色当成静止色，越点越偏。
+        """
         if not self._enabled:
             return
-        self._base = color
-        for item in self._shape:
-            self.itemconfig(item, fill=color)
+        start = self._cur or color
+
+        def frame(t):
+            c = mix(start, color, t)
+            self._cur = c
+            for item in self._shape:
+                self.itemconfig(item, fill=c)
+
+        self._anim.run("color", duration, frame)
 
     def config(self, **kw):
         if "text" in kw:
@@ -418,8 +503,8 @@ class RoundedButton(tk.Canvas):
         if "background" in kw:
             self._base = kw["background"]
             self._active = kw.get("activebackground") or kw["background"]
-            for item in self._shape:
-                self.itemconfig(item, fill=self._base)
+            # 状态切换用常规时长 —— 开始/停止是件"有分量"的事，83ms 一闪而过
+            self._paint(self._base, MOTION_NORMAL)
         if "state" in kw:
             self._enabled = kw["state"] != "disabled"
             self.config_cursor("hand2" if self._enabled else "arrow")
@@ -428,6 +513,65 @@ class RoundedButton(tk.Canvas):
 
     def config_cursor(self, cursor):
         tk.Canvas.config(self, cursor=cursor)
+
+    def dispose(self):
+        """控件要没了：把没跑完的动画取消掉。"""
+        self._anim.cancel()
+
+
+class Animator:
+    """按 Fluent 的时长和缓动驱动一个逐帧回调。
+
+    tkinter 没有 CSS transition，也没有透明度，动画只能是「每帧算一个新值，
+    用 after() 排下一帧」。全部动画都走这里，好处有两个：
+
+      · 时长和缓动统一，不会每处各写一套魔数
+      · 换主题要重建界面，能一把取消干净 —— 否则旧控件的回调会打到已经
+        销毁的 widget 上，报一堆 TclError
+    """
+
+    def __init__(self, widget):
+        self.widget = widget
+        self._jobs = {}
+
+    def run(self, key, duration, on_frame, ease=None, on_done=None):
+        self.cancel(key)
+        ease = ease or ease_out
+        steps = max(1, int(round(float(duration) / FRAME_MS)))
+
+        def tick(step):
+            if step > steps:
+                self._jobs.pop(key, None)
+                if on_done:
+                    try:
+                        on_done()
+                    except tk.TclError:
+                        pass
+                return
+            try:
+                on_frame(ease(step / steps))
+            except tk.TclError:
+                self._jobs.pop(key, None)      # 控件没了，别再排下一帧
+                return
+            self._jobs[key] = self.widget.after(FRAME_MS, tick, step + 1)
+
+        tick(1)
+
+    def cancel(self, key=None):
+        if key is None:
+            jobs, self._jobs = self._jobs, {}
+        else:
+            job = self._jobs.pop(key, None)
+            jobs = {key: job} if job else {}
+        for job in jobs.values():
+            try:
+                self.widget.after_cancel(job)
+            except Exception:
+                pass
+
+    def dispose(self):
+        """和 RoundedButton.dispose 同名 —— 退出清理时能一视同仁地调。"""
+        self.cancel()
 
 
 def set_window_icon(root):
@@ -636,6 +780,8 @@ class App:
         self.role_of = {}
         self._recovering = False     # 正在自动重启 NapCat？
         self._theming = False        # 正在重建界面换主题？（防重入）
+        self._pulsing = False        # 状态点呼吸动画在跑？（防止起出多条循环）
+        self._last_send_sig = None   # 上一次「上次通知」的内容指纹，变了才闪一下
 
         self._build_ui()
 
@@ -845,10 +991,19 @@ class App:
         left = tk.Frame(inner, background=CARD)
         left.pack(side="left", fill="both", expand=True)
 
+        # 状态行：一个圆点 + 一行字。圆点在监控中会呼吸（见 _pulse_dot），
+        # 不监控时是静止的中灰 —— 一眼就能看出「它到底在不在干活」。
+        row = tk.Frame(left, background=CARD)
+        row.pack(anchor="w", fill="x")
+        self.dot = tk.Canvas(row, width=14, height=14, background=CARD,
+                             highlightthickness=0, bd=0)
+        self.dot.pack(side="left", padx=(0, 8), pady=(2, 0))
+        self._dot = self.dot.create_oval(3, 3, 11, 11, fill=MUTED, outline="")
+
         self.lbl_hotkey_hint = tk.Label(
-            left, justify="left", anchor="w", font=(FONT, 11, "bold"),
-            background=CARD, foreground=OK_COLOR, bd=0, wraplength=600)
-        self.lbl_hotkey_hint.pack(anchor="w")
+            row, justify="left", anchor="w", font=(FONT, 11, "bold"),
+            background=CARD, foreground=OK_COLOR, bd=0, wraplength=580)
+        self.lbl_hotkey_hint.pack(side="left", anchor="w")
 
         self.lbl_tip = tk.Label(
             left, justify="left", anchor="w", font=(FONT, 9), background=CARD,
@@ -881,6 +1036,25 @@ class App:
         self._build_groups_tab()
         self._build_trigger_tab()
         self._build_message_tab()
+
+        self._tab_anim = Animator(nb)
+        nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+    def _on_tab_changed(self, _event=None):
+        """切标签页时让内容「落到位」。
+
+        Fluent 的进入动画是 167ms 快进慢停。tkinter 没有透明度，做不了真正的
+        淡入，所以改用位移：内容从上方一点滑下来。位移比透明度更容易被眼睛
+        读到，也更好实现 —— 关键是不假装能做做不到的事。
+        """
+        try:
+            page = self.notebook.nametowidget(self.notebook.select())
+            base = int(page.cget("pady")) or 16
+        except Exception:
+            return
+        self._tab_anim.run(
+            "tab", MOTION_FAST,
+            lambda t: page.config(pady=base + int(round(14 * (1 - t)))))
 
     def _build_log_tab(self):
         page = tk.Frame(self.tab_log, background=BG, padx=16, pady=16)
@@ -923,6 +1097,10 @@ class App:
         """
         outer, card = make_card(parent)
         outer.pack(side="bottom", fill="x", pady=(12, 0))
+        # 留着给「结果变了闪一下」用 —— outer 的底色就是那圈 1px 描边，
+        # 闪它等于闪一圈高亮环，只动一个控件，不用挨个改子控件
+        self._last_send_outer = outer
+        self._last_send_anim = Animator(outer)
 
         head = tk.Frame(card, background=CARD)
         head.pack(fill="x")
@@ -970,6 +1148,22 @@ class App:
         else:
             self.lbl_last_send.config(text="已发送 {}/{}".format(ok, total),
                                       foreground=WARN)
+
+        # 结果变了就闪一圈高亮环（250ms，Fluent 的常规时长）。
+        # 用指纹判断而不是「有没有值」—— 第二次通知来了也得闪。
+        sig = (when, what, ok, total, len(failed))
+        if sig != self._last_send_sig:
+            self._last_send_sig = sig
+            self._flash_last_send(PRIMARY if not failed else BAD_COLOR)
+
+    def _flash_last_send(self, color):
+        """描边从 color 淡回 BORDER。只动 outer 一个控件，代价极低。"""
+        outer = getattr(self, "_last_send_outer", None)
+        anim = getattr(self, "_last_send_anim", None)
+        if outer is None or anim is None:
+            return
+        anim.run("flash", MOTION_NORMAL,
+                 lambda t: outer.config(background=mix(color, BORDER, t)))
 
     def _build_groups_tab(self):
         self.sf_groups = ScrollFrame(self.tab_groups)
@@ -1324,11 +1518,37 @@ class App:
         elif self.state == STATE_RUNNING:
             self.stop_all()
 
+    def _set_dot(self, color):
+        try:
+            self.dot.itemconfig(self._dot, fill=color)
+        except tk.TclError:
+            pass
+
+    def _pulse_dot(self):
+        """监控中让底栏那个状态点呼吸。
+
+        用连续正弦而不是「亮-暗」两帧硬切：硬切看着像在闪，像报警；呼吸才是
+        「我在正常工作」。停止监控后不再排下一帧，不会空转。
+        """
+        if self.state != STATE_RUNNING or not self._pulsing:
+            self._pulsing = False
+            self._set_dot(MUTED)
+            return
+        try:
+            phase = (time.time() * 1.6) % (2 * math.pi)
+            t = (math.sin(phase) + 1) / 2.0            # 0..1
+            # 最多往背景退 45%，退到底也还是个看得见的绿，不会闪没
+            self._set_dot(mix(OK_COLOR, CARD, 0.45 * (1 - t)))
+        except tk.TclError:
+            self._pulsing = False                      # 界面重建了，循环自然结束
+            return
+        self.root.after(60, self._pulse_dot)
+
     def _set_state(self, state, note=""):
         self.state = state
-        # lbl_state 在头部，而头部现在是跟随主题的浅/深色，所以这里一律用
-        # 主题里的语义色（MUTED / OK_COLOR），别再写死颜色 —— 写死的话
-        # 换到深色主题就会有一行字看不见。
+        # lbl_state 在头部，而头部是跟随主题的浅/深色，所以这里一律用主题里的
+        # 语义色（MUTED / OK_COLOR），别再写死颜色 —— 写死的话换到深色主题
+        # 就会有一行字看不见。
         if state == STATE_IDLE:
             self.btn_main.config(text="开始直播通知", background=BLUE,
                                  activebackground=BLUE_DARK, state="normal")
@@ -1343,6 +1563,16 @@ class App:
                                  activebackground=RED_DARK, state="normal")
             self.lbl_state.config(text="正在监控，开播会自动通知" + ("　" + note if note else ""),
                                   foreground=OK_COLOR)
+
+        # 状态点：只有监控中才呼吸。加 _pulsing 是为了防止重复调用 _set_state
+        # 时起出好几条并行的动画循环。
+        if state == STATE_RUNNING:
+            if not self._pulsing:
+                self._pulsing = True
+                self._pulse_dot()
+        else:
+            self._pulsing = False
+            self._set_dot(MUTED)
 
     # ==================================================================
     #  主题
@@ -2319,6 +2549,14 @@ class App:
                     self.stop_event.set()
                 core.log("退出中，正在关闭 NapCat …")
                 stop_napcat()
+        # 退出前把动画停掉：窗口销毁之后还在排队的回调会报
+        # "main thread is not in main loop"
+        self._pulsing = False
+        for obj in (getattr(self, "_tab_anim", None),
+                    getattr(self, "btn_main", None),
+                    getattr(self, "_last_send_anim", None)):
+            if obj is not None and hasattr(obj, "dispose"):
+                obj.dispose()
         self._save_geometry()
         core.remove_log_sink(self.log_queue.put)
         self.root.destroy()
