@@ -267,17 +267,19 @@ STATE_RUNNING = "running"
 # --------------------------------------------------------------------------
 
 def make_card(parent, title=None, padx=16, pady=16):
-    """白底卡片：外面套一圈 1px 细边。返回 (外层容器, 内层内容区)。"""
+    """卡片：外面套一圈 1px 细边。返回 (外层容器, 内层内容区)。"""
     outer = tk.Frame(parent, background=BORDER)
     inner = tk.Frame(outer, background=CARD, padx=padx, pady=pady)
     inner.pack(fill="both", expand=True, padx=1, pady=1)
     if title:
-        tk.Label(inner, text=title, background=CARD, foreground=PRIMARY,
-                 font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 9))
+        # 标题用正文色而不是主色：Windows 11 设置里的分组标题就是加粗深色，
+        # 不是彩色的。彩色标题会让每个卡片都在喊"看我"。
+        tk.Label(inner, text=title, background=CARD, foreground=TEXT,
+                 font=(FONT, 10, "bold")).pack(anchor="w", pady=(0, 12))
     return outer, inner
 
 
-def card_hint(parent, text, wraplength=790, indent=0, pady=(5, 0)):
+def card_hint(parent, text, wraplength=790, indent=0, pady=(6, 0)):
     """卡片里的灰色说明文字。"""
     lbl = tk.Label(parent, text=text, background=CARD, foreground=MUTED,
                    justify="left", anchor="w", wraplength=wraplength,
@@ -516,6 +518,80 @@ class RoundedButton(tk.Canvas):
 
     def dispose(self):
         """控件要没了：把没跑完的动画取消掉。"""
+        self._anim.cancel()
+
+
+class TabStrip(tk.Frame):
+    """自绘标签栏，替掉 ttk.Notebook 自带的那一条。
+
+    为什么不用 ttk.Notebook 的标签页：clam 主题的 tab 自带**竖向分隔线**和
+    一圈**虚线焦点框**，而且那是画在 tab 元素本身上的 —— 我把 bordercolor /
+    lightcolor / darkcolor 全设成背景色也去不掉，只改颜色没用。
+
+    自绘的另一个好处是能做滑块动效：选中态用一条会**滑过去**的指示条，
+    这是 Fluent 里很典型的一个小动效，Notebook 给不了。
+    """
+
+    HEIGHT = 38
+    BAR_H = 2
+
+    def __init__(self, parent, labels, command, background=BG):
+        super().__init__(parent, background=background, height=self.HEIGHT)
+        self.pack_propagate(False)
+        self.command = command
+        self._index = 0
+        self._anim = Animator(self)
+
+        # 指示条先建：tkinter 里同层控件按创建顺序叠，先建的在下面
+        self._bar = tk.Frame(self, background=PRIMARY)
+        self._bar.place(x=0, y=self.HEIGHT - self.BAR_H, width=0, height=self.BAR_H)
+
+        self._row = tk.Frame(self, background=background)
+        self._row.pack(fill="both", expand=True)
+
+        self._tabs = []
+        for i, text in enumerate(labels):
+            lbl = tk.Label(self._row, text=text, font=(FONT, 10),
+                           background=background, foreground=MUTED,
+                           padx=20, cursor="hand2")
+            lbl.pack(side="left", fill="y")
+            lbl.bind("<Button-1>", lambda e, i=i: self.command(i))
+            lbl.bind("<Enter>", lambda e, i=i: self._hover(i, True))
+            lbl.bind("<Leave>", lambda e, i=i: self._hover(i, False))
+            self._tabs.append(lbl)
+
+        self.after(30, lambda: self.set_active(0, animate=False))
+
+    def _hover(self, i, on):
+        if i == self._index:
+            return
+        self._tabs[i].config(foreground=TEXT if on else MUTED)
+
+    def set_active(self, index, animate=True):
+        if not (0 <= index < len(self._tabs)):
+            return
+        self._index = index
+        for i, lbl in enumerate(self._tabs):
+            lbl.config(foreground=PRIMARY if i == index else MUTED,
+                       font=(FONT, 10, "bold") if i == index else (FONT, 10))
+
+        target = self._tabs[index]
+        x = target.winfo_x()
+        w = target.winfo_width()
+        if w < 2:                       # 还没布局完，等一帧再来
+            self.after(30, lambda: self.set_active(index, animate=False))
+            return
+        if not animate:
+            self._bar.place_configure(x=x, width=w)
+            return
+        start = self._bar.winfo_x()
+        start_w = max(self._bar.winfo_width(), 1)
+        self._anim.run("bar", MOTION_FAST,
+                       lambda t: self._bar.place_configure(
+                           x=int(start + (x - start) * t),
+                           width=int(start_w + (w - start_w) * t)))
+
+    def dispose(self):
         self._anim.cancel()
 
 
@@ -958,21 +1034,27 @@ class App:
             26, 128, anchor="w", text="", fill=WARN, font=(FONT, 10, "bold")))
 
         # 右上角：深浅色开关。
-        # 这里用真正的 Label，而不是 Canvas 文字项 + tag_bind。文字项上的
-        # tag_bind 靠不住：rebuild_ui 之后鼠标还停在原位置时会被反复命中，
-        # 实测出现过主题**自我横跳**（一秒切一次，日志里连着一串）。真控件的
-        # 点击语义是可靠的。背景色取渐变在这个高度上的实际颜色，免得出现色块。
+        #
+        # 两点讲究：
+        #  1. 用真正的 Label 而不是 Canvas 文字项 + tag_bind —— 文字项上的
+        #     tag_bind 靠不住：rebuild_ui 之后鼠标还停在原位置时会被反复命中，
+        #     实测出现过主题自我横跳（一秒切一次）。
+        #  2. **必须有边框**。最早它是没有边框的一行字，而 Label 的 padx 会把
+        #     文字往里推，于是「浅色」比下一行的「未开启」缩进了 8px —— 看着
+        #     就是没对齐。加了边框之后，按钮的**右边缘**跟「未开启」的右边缘
+        #     对齐；同时也一眼看得出这是个能点的按钮，而不是一行说明文字。
         self.btn_theme = tk.Label(
-            self.head, text="", background=mix(SUNKEN, BG, 32.0 / 137.0),
-            foreground=MUTED, font=(FONT, 10), cursor="hand2",
-            padx=8, pady=2, bd=0, highlightthickness=0)
+            self.head, text="", background=CARD, foreground=TEXT,
+            font=(FONT, 9), cursor="hand2", padx=12, pady=4,
+            bd=0, highlightthickness=1, highlightbackground=BORDER,
+            highlightcolor=PRIMARY)
         self._theme_win = self.head.create_window(0, 32, anchor="e",
                                                   window=self.btn_theme)
         self.btn_theme.bind("<Button-1>", lambda e: self.toggle_theme())
         self.btn_theme.bind("<Enter>",
-                            lambda e: self.btn_theme.config(foreground=PRIMARY))
+                            lambda e: self.btn_theme.config(background=PRIMARY_S))
         self.btn_theme.bind("<Leave>",
-                            lambda e: self.btn_theme.config(foreground=MUTED))
+                            lambda e: self.btn_theme.config(background=CARD))
 
         # ---------------- 底部常驻操作栏 ----------------
         # 整个界面最「Apple Music」的一处：主操作不放顶部那个巨大的色块里，
@@ -1018,43 +1100,70 @@ class App:
             fill=PRIMARY, fill_active=PRIMARY_D, background=CARD)
         self.btn_main.pack(side="right", padx=(24, 0))
 
-        # ---------------- 标签页 ----------------
-        nb = ttk.Notebook(self.root)
-        nb.pack(fill="both", expand=True, padx=16, pady=(8, 8))
-        self.notebook = nb
+        # ---------------- 标签栏 + 内容区 ----------------
+        self.tabbar = TabStrip(
+            self.root, ["运行日志", "通知群", "触发方式", "消息与设置"],
+            command=self.select_tab)
+        self.tabbar.pack(fill="x", padx=16, pady=(6, 0))
+        tk.Frame(self.root, background=BORDER, height=1).pack(fill="x")
 
-        self.tab_log = tk.Frame(nb, background=BG)
-        self.tab_groups = tk.Frame(nb, background=BG)
-        self.tab_trigger = tk.Frame(nb, background=BG)
-        self.tab_message = tk.Frame(nb, background=BG)
-        nb.add(self.tab_log, text="运行日志")
-        nb.add(self.tab_groups, text="通知群")
-        nb.add(self.tab_trigger, text="触发方式")
-        nb.add(self.tab_message, text="消息与设置")
+        body = tk.Frame(self.root, background=BG)
+        body.pack(fill="both", expand=True)
+
+        self.tab_log = tk.Frame(body, background=BG)
+        self.tab_groups = tk.Frame(body, background=BG)
+        self.tab_trigger = tk.Frame(body, background=BG)
+        self.tab_message = tk.Frame(body, background=BG)
+        self._pages = [self.tab_log, self.tab_groups,
+                       self.tab_trigger, self.tab_message]
 
         self._build_log_tab()
         self._build_groups_tab()
         self._build_trigger_tab()
         self._build_message_tab()
 
-        self._tab_anim = Animator(nb)
-        nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        self._tab_anim = Animator(body)
+        self._tab_index = 0
+        self.select_tab(0, animate=False)
 
-    def _on_tab_changed(self, _event=None):
-        """切标签页时让内容「落到位」。
+    def select_tab(self, index, animate=True):
+        """切换标签页。
+
+        内容用 pack / pack_forget 换，不用 ttk.Notebook —— 那条标签栏在 clam
+        主题下自带分隔线和虚线焦点框，去不掉。
 
         Fluent 的进入动画是 167ms 快进慢停。tkinter 没有透明度，做不了真正的
-        淡入，所以改用位移：内容从上方一点滑下来。位移比透明度更容易被眼睛
+        淡入，所以改用位移：内容从上方一点点落到位。位移比透明度更容易被眼睛
         读到，也更好实现 —— 关键是不假装能做做不到的事。
         """
-        try:
-            page = self.notebook.nametowidget(self.notebook.select())
-            base = int(page.cget("pady")) or 16
-        except Exception:
+        if not (0 <= index < len(self._pages)):
             return
-        self._tab_anim.run(
-            "tab", MOTION_FAST,
-            lambda t: page.config(pady=base + int(round(14 * (1 - t)))))
+        changed = (index != getattr(self, "_tab_index", -1))
+        self._tab_index = index
+        for i, page in enumerate(self._pages):
+            if i == index:
+                page.pack(fill="both", expand=True)
+            else:
+                page.pack_forget()
+        if hasattr(self, "tabbar"):
+            self.tabbar.set_active(index, animate=animate)
+
+        if not (animate and changed):
+            return
+        page = self._pages[index]
+        inner = page.winfo_children()
+        inner = inner[0] if inner else None
+        if inner is None:
+            return
+        base = int(inner.cget("pady")) or 16
+
+        def frame(t):
+            try:
+                inner.config(pady=base + int(round(14 * (1 - t))))
+            except tk.TclError:
+                pass
+
+        self._tab_anim.run("tab", MOTION_FAST, frame)
 
     def _build_log_tab(self):
         page = tk.Frame(self.tab_log, background=BG, padx=16, pady=16)
@@ -1323,18 +1432,29 @@ class App:
         grid.pack(fill="x")
         grid.columnconfigure(1, weight=1)
 
-        def row_label(row, text, top=5):
+        # 标签列给个固定宽度，三行的输入框左边缘才会齐
+        grid.columnconfigure(0, minsize=80)
+
+        def row_label(row, text, top=False):
+            """表单行标签。
+
+            `sticky="w"` 而不是 `"nw"` 是关键：前者让标签在格子里**垂直居中**，
+            跟旁边那个更高的输入框对得上；后者是顶对齐，「标题」两个字贴在
+            输入框上沿，看着就是没对齐。多行输入框（开播文案）例外 —— 那种
+            标签按惯例应该顶对齐，所以留了 top 开关。
+            """
             tk.Label(grid, text=text, background=CARD, foreground=TEXT,
-                     font=(FONT, 9), anchor="w").grid(
-                row=row, column=0, sticky="nw", pady=(top, 0), padx=(0, 10))
+                     font=(FONT, 9), anchor="nw" if top else "w").grid(
+                row=row, column=0, sticky="nw" if top else "w",
+                padx=(0, 16), pady=(5, 0) if top else 0)
 
         row_label(0, "标题")
         ttk.Entry(grid, textvariable=self.var_title, font=(FONT, 9)).grid(
-            row=0, column=1, sticky="we", pady=(5, 0))
+            row=0, column=1, sticky="we", pady=(0, 12))
         row_label(1, "直播间链接")
         ttk.Entry(grid, textvariable=self.var_link, font=(FONT, 9)).grid(
-            row=1, column=1, sticky="we", pady=(8, 0))
-        row_label(2, "开播文案")
+            row=1, column=1, sticky="we", pady=(0, 12))
+        row_label(2, "开播文案", top=True)
         self.txt_tpl = tk.Text(grid, height=6, wrap="word", font=(FONT, 9),
                                background=SUNKEN, foreground=TEXT,
                                relief="flat", bd=0,
@@ -1342,15 +1462,15 @@ class App:
                                highlightbackground=BORDER,
                                highlightcolor=PRIMARY,
                                insertbackground=TEXT,
-                               padx=6, pady=4)
-        self.txt_tpl.grid(row=2, column=1, sticky="we", pady=(8, 0))
+                               padx=8, pady=6)
+        self.txt_tpl.grid(row=2, column=1, sticky="we")
         tk.Label(grid, text="可用占位符：{title} {link} {game} {time} {date}",
                  background=CARD, foreground=MUTED, font=(FONT, 8),
-                 anchor="w").grid(row=3, column=1, sticky="w", pady=(3, 0))
+                 anchor="w").grid(row=3, column=1, sticky="w", pady=(8, 0))
         tk.Label(grid, text="想写多套就分几段，中间用单独一行 --- 隔开 —— "
                             "每次开播随机挑一套，免得每次都一模一样",
                  background=CARD, foreground=MUTED, font=(FONT, 8),
-                 anchor="w").grid(row=4, column=1, sticky="w", pady=(1, 0))
+                 anchor="w").grid(row=4, column=1, sticky="w", pady=(2, 0))
 
         self.var_cover = tk.BooleanVar()
         self.var_cover_size = tk.StringVar()
