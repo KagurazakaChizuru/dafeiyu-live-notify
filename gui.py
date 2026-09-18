@@ -1469,9 +1469,7 @@ class App:
         self.head.delete("hair")
         self.head.create_line(0, h - 1, w, h - 1, fill=BORDER, tags="hair")
         # 右上角两行要跟着窗口宽度走
-        # 按钮右边缘跟内容右边界对齐；状态文字右边缘排在按钮左侧留 16px
         self.head.coords(self._theme_win, w - 26, 34)
-        self.head.coords(self.lbl_state.item, w - 28, 82)
         # 可能换行的文字限制宽度，否则会顶出画布
         for lbl in (self.lbl_sources, self.lbl_alert):
             self.head.itemconfig(lbl.item, width=w - 52)
@@ -1499,8 +1497,6 @@ class App:
         # 「未开启」说的是监控开没开，主题按钮是界面偏好 —— 两者没关系，
         # 并排放会让人以为「未开启」修饰的是旁边的按钮。分组要按语义，不是按
         # 好不好对齐。
-        self.lbl_state = CanvasLabel(self.head, self.head.create_text(
-            0, 82, anchor="e", text="", fill=MUTED, font=(FONT, 10)))
         self.lbl_conn = CanvasLabel(self.head, self.head.create_text(
             26, 82, anchor="w", text="● 正在检查 …", fill=TEXT,
             font=(FONT, 10)))
@@ -1564,11 +1560,18 @@ class App:
             text="点一下就开始，之后一直挂着。不影响你自己聊天的 QQ。")
         self.lbl_tip.pack(anchor="w", pady=(3, 0))
 
+        # 右侧一列：按钮在上，状态在它正下方。
+        # 状态文字描述的就是这个按钮控制的东西，挂在一起才读得通。
+        right = tk.Frame(inner, background=SURFACE)
+        right.pack(side="right", padx=(24, 0))
         self.btn_main = RoundedButton(
-            inner, text="开始直播通知", command=self.toggle_main,
+            right, text="开始直播通知", command=self.toggle_main,
             font_spec=(FONT, 14, "bold"), height=48, radius=24, width=210,
             fill=PRIMARY, fill_active=PRIMARY_D, background=SURFACE)
-        self.btn_main.pack(side="right", padx=(24, 0))
+        self.btn_main.pack()
+        self.lbl_state = tk.Label(right, text="", background=SURFACE,
+                                  foreground=MUTED, font=(FONT, 9))
+        self.lbl_state.pack(pady=(6, 0))
 
         # ---------------- 标签栏 + 内容区 ----------------
         self.tabbar = TabStrip(
