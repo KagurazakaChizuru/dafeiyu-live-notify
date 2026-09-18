@@ -1364,6 +1364,9 @@ class App:
         self._theming = False        # 正在重建界面换主题？（防重入）
         self._pulsing = False        # 状态点呼吸动画在跑？（防止起出多条循环）
         self._last_send_sig = None   # 上一次「上次通知」的内容指纹，变了才闪一下
+        # 彩蛋：版本号点五下的计数。停手超过 1.2 秒就重新数。
+        self._ver_hits = 0
+        self._ver_last = 0.0
 
         self._build_ui()
 
@@ -1496,6 +1499,68 @@ class App:
                 pass
         self._head_job = self.root.after(60, self._paint_header)
 
+    def _on_version_click(self, _event=None):
+        """版本号点五下 —— 彩蛋。
+
+        计数要防抖：五下如果算错次数，就等于没有彩蛋。所以要求点与点之间
+        不超过 1.2 秒，停手久了就重新数。
+        """
+        if not click_ready():
+            return
+        now = time.time()
+        if now - self._ver_last > 1.2:
+            self._ver_hits = 0
+        self._ver_last = now
+        self._ver_hits += 1
+        if self._ver_hits >= 5:
+            self._ver_hits = 0
+            self._show_about()
+
+    def _show_about(self):
+        """关于窗口，兼彩蛋。
+
+        **完全静态**：不读配置、不发网络请求、不改任何状态。
+        删掉这个方法不影响程序任何功能 —— 这是当初给自己定的验收标准。
+        """
+        dlg = tk.Toplevel(self.root)
+        dlg.title("关于")
+        dlg.configure(background=BG)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+
+        box = tk.Frame(dlg, background=BG, padx=28, pady=24)
+        box.pack(fill="both", expand=True)
+
+        tk.Label(box, text="大肥鱼直播姬", background=BG, foreground=TEXT,
+                 font=(FONT, 16, "bold")).pack(anchor="w")
+        tk.Label(box, text="v" + core.VERSION, background=BG,
+                 foreground=MUTED, font=(FONT, 9)).pack(anchor="w",
+                                                        pady=(2, 16))
+
+        body = (
+            "开播时自动往 QQ 群发通知，省得每回手动去喊人。\n\n"
+            "它没有用任何第三方库，四千多行全是 Python 标准库和 tkinter。\n"
+            "不是因为这样优雅 —— 是没有依赖的东西才能活得久。\n\n"
+            "如果哪天没人维护了，希望它还能自己站着。"
+        )
+        tk.Label(box, text=body, background=BG, foreground=TEXT,
+                 font=(FONT, 9), justify="left", anchor="w",
+                 wraplength=360).pack(anchor="w")
+
+        tk.Frame(box, background=BORDER, height=1).pack(fill="x", pady=18)
+        tk.Label(box, text="KagurazakaChizuru", background=BG,
+                 foreground=MUTED, font=(FONT, 9)).pack(anchor="e")
+
+        dlg.update_idletasks()
+        # 居中到主窗口，而不是屏幕 —— 它属于那个窗口
+        x = self.root.winfo_rootx() + (self.root.winfo_width()
+                                       - dlg.winfo_width()) // 2
+        y = self.root.winfo_rooty() + (self.root.winfo_height()
+                                       - dlg.winfo_height()) // 3
+        dlg.geometry("+{}+{}".format(max(0, x), max(0, y)))
+        dlg.bind("<Escape>", lambda e: dlg.destroy())
+        dlg.focus_set()
+
     def _paint_header(self):
         self._head_job = None
         w = self.head.winfo_width()
@@ -1528,8 +1593,20 @@ class App:
         self._head_job = None
         self.head.bind("<Configure>", self._head_resized)
 
-        self.head.create_text(26, 34, anchor="w", text="大肥鱼直播姬",
+        _title = "大肥鱼直播姬"
+        self.head.create_text(26, 34, anchor="w", text=_title,
                               fill=TEXT, font=(FONT, 23, "bold"))
+        # 版本号：小一号、灰一点，贴着标题右侧的基线放。
+        # 用真正的 Label 而不是画布文字项 —— 文字项上的 tag_bind 靠不住
+        # （换主题重建界面后，鼠标停在原位置会被反复命中，这个坑踩过一次）。
+        self._title_w = tkfont.Font(family=FONT, size=23,
+                                    weight="bold").measure(_title)
+        self.lbl_ver = tk.Label(self.head, text="v" + core.VERSION,
+                                background=SUNKEN, foreground=MUTED,
+                                font=(FONT, 9), cursor="hand2")
+        self._ver_win = self.head.create_window(
+            26 + self._title_w + 12, 40, anchor="w", window=self.lbl_ver)
+        self.lbl_ver.bind("<Button-1>", self._on_version_click)
         # 标题下面一小段琥珀色，是整块头部唯一的彩色
         self.head.create_line(27, 62, 62, 62, fill=ACCENT, width=3,
                               capstyle="round")
