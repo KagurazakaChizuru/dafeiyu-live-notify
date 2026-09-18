@@ -30,6 +30,7 @@
 
 param(
     [string]$Version,
+    [string]$Asset,
     [switch]$DryRun
 )
 
@@ -115,4 +116,28 @@ if ($existing) {
         draft = $false; prerelease = $false
     }
     Write-Host "[created] $tag  ->  $($r.html_url)"
+}
+
+# --- 4. attach the release zip --------------------------------------------
+# Build it first:  .\_package.ps1 -Exe <path to exe>
+if ($Asset) {
+    if (-not (Test-Path $Asset)) { throw "asset not found: $Asset" }
+    $Asset = (Resolve-Path $Asset).Path
+    $assetName = Split-Path -Leaf $Asset
+
+    # Re-running must not fail: drop any asset that already has this name.
+    foreach ($a in @(Invoke-RestMethod -Uri "$api/$($r.id)/assets" -Headers $headers)) {
+        if ($a.name -eq $assetName) {
+            Invoke-RestMethod -Method Delete -Uri "$api/assets/$($a.id)" -Headers $headers
+            Write-Host "[removed] previous asset $assetName"
+        }
+    }
+
+    $upload = 'https://uploads.github.com/repos/KagurazakaChizuru/dafeiyu-live-notify/releases/' +
+              $r.id + '/assets?name=' + [uri]::EscapeDataString($assetName)
+    $bytes = [System.IO.File]::ReadAllBytes($Asset)
+    $up = Invoke-RestMethod -Method Post -Uri $upload -Headers $headers `
+                            -Body $bytes -ContentType 'application/zip'
+    Write-Host ("[asset]   {0}  ({1:N2} MB)" -f $up.name, ($up.size / 1MB))
+    Write-Host "          $($up.browser_download_url)"
 }

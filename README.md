@@ -53,7 +53,24 @@ OBS 开始推流   ─┼──→ 冷却闸门 ──→ OneBot HTTP ──→ 
 
 ---
 
-## 快速开始
+## 下载
+
+**[最新版本 Releases](https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/latest)**
+
+不想碰命令行就下那个 zip：解开、双击 exe、点大按钮，完事。
+包里已经带好了 exe（内含 Python 运行时）和全部文档。
+
+还差两步得你自己做，原因见下方「关于许可证」：
+
+1. 下 [NapCat](https://github.com/NapNeko/NapCatQQ/releases) 的 `NapCat.Shell.zip`，
+   解压到 `app\napcat\`
+2. 在 `app\` 里跑一次 `_setup-qq-copy.ps1`，它从你已装的 QQ 生成那个
+   「私有副本」（约 7 MB，不是 1.1 GB）
+
+> ⚠️ 包里的 `qq-napcat-private`（QQ 本体）**永远不会**出现在 Release 里 ——
+> 那是腾讯的专有软件，公开分发属于侵权。它由上面第 2 步在本地生成。
+
+## 从源码跑
 
 ```bash
 git clone https://github.com/KagurazakaChizuru/dafeiyu-live-notify.git
@@ -65,7 +82,6 @@ python gui.py                   # 打开界面
 ```
 
 需要 Python 3.8+，**不需要装任何第三方库**。
-另外还需要一份 [NapCat](https://github.com/NapNeko/NapCatQQ)（本仓库不包含，见下）。
 
 详细步骤、界面说明和排错，看 **[使用文档](docs/使用文档.md)**。
 
