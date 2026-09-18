@@ -1004,6 +1004,65 @@ class Spring:
         step()
 
 
+class ThemeToggle(tk.Canvas):
+    """圆形的深浅色开关，图标用**字形**。
+
+    实测过一轮（把候选字形 × 候选字体全渲染出来比对），结论：
+
+        字体必须是 **Segoe UI Symbol**
+            ☀ U+2600     实心太阳，正常
+            🌙 U+1F319    月牙，粗细正好
+        换成 Segoe UI Emoji 就废了：☀ 变成一个空心圆圈，🌞 变成一个笑脸。
+
+    之前 `☾` 显示成怪模怪样的 C，不是字形的问题，是**9pt 太小**，月牙糊成一团。
+
+    图标语义按**点下去会变成什么**来放 —— 开关类控件的通行做法：
+        当前浅色 → 显示月亮（点了变深色）
+        当前深色 → 显示太阳（点了变浅色）
+    """
+
+    D = 30                      # 直径（同时也是点击热区）
+    GLYPH_FONT = "Segoe UI Symbol"
+
+    def __init__(self, parent, command, background=None, dark=False):
+        bg = background or BG
+        super().__init__(parent, width=self.D, height=self.D, background=bg,
+                         highlightthickness=0, bd=0, cursor="hand2")
+        self.command = command
+        self._dark = dark
+        self._hover = False
+        self._face = SURFACE
+        self._ink = TEXT
+        self._label = None
+        self.bind("<Button-1>", lambda e: self.command())
+        self.bind("<Enter>", lambda e: self._hover_set(True))
+        self.bind("<Leave>", lambda e: self._hover_set(False))
+        self._draw()
+
+    def _hover_set(self, on):
+        self._hover = on
+        self._draw()
+
+    def set_dark(self, dark):
+        if dark != self._dark:
+            self._dark = dark
+            self._draw()
+
+    def _draw(self):
+        self.delete("all")
+        self._face = PRIMARY_S if self._hover else SURFACE
+        self._ink = PRIMARY if self._hover else TEXT
+        self.create_oval(1, 1, self.D - 1, self.D - 1, fill=self._face,
+                         outline=BORDER, width=1)
+        self._label = self.create_text(
+            self.D / 2.0, self.D / 2.0 + 1,
+            text="\u2600" if self._dark else "\U0001f319",
+            fill=self._ink, font=(self.GLYPH_FONT, 15))
+
+    def dispose(self):
+        pass
+
+
 class Animator:
     """按 Fluent 的时长和缓动驱动一个逐帧回调。
 
@@ -1408,12 +1467,12 @@ class App:
         self.head.create_line(0, h - 1, w, h - 1, fill=BORDER, tags="hair")
         # 右上角两行要跟着窗口宽度走
         # 按钮右边缘跟内容右边界对齐；状态文字右边缘排在按钮左侧留 16px
-        self.head.coords(self._theme_win, w - 28, 34)
+        self.head.coords(self._theme_win, w - 26, 34)
         self.head.coords(self.lbl_state.item, w - 28, 82)
         # 可能换行的文字限制宽度，否则会顶出画布
         for lbl in (self.lbl_sources, self.lbl_alert):
             self.head.itemconfig(lbl.item, width=w - 52)
-        self.btn_theme.config(text="浅色模式" if THEME == "dark" else "深色模式")
+        self.btn_theme.set_dark(THEME == "dark")
 
     def _build_ui(self):
         self._setup_style()
@@ -1457,17 +1516,11 @@ class App:
         #     文字往里推，于是「浅色」比下一行的「未开启」缩进了 8px —— 看着
         #     就是没对齐。加了边框之后，按钮的**右边缘**跟「未开启」的右边缘
         #     对齐；同时也一眼看得出这是个能点的按钮，而不是一行说明文字。
-        # 用胶囊按钮而不是描边方块：界面别处全圆角了，它是方的就格格不入。
-        # 另外文字里**不要放 ☾ / ☀ 这类符号** —— 微软雅黑下那个月亮渲染成了
-        # 一个怪模怪样的 C，看着像坏了。就用纯文字。
-        self.btn_theme = RoundedButton(
-            self.head, text="", command=self.toggle_theme,
-            font_spec=(FONT, 9), height=28, radius=14, width=74,
-            # background 必须是**它实际坐着的那个面**（头部是 SUNKEN），
-            # 不是它自己的填充色 —— 抗锯齿的圆角是拿这个颜色去混的，
-            # 传错了就会白混白，圆角直接看不出来。
-            fill=SURFACE, fill_active=PRIMARY_S, background=SUNKEN,
-            text_fill=TEXT)
+        # 圆形图标按钮。图标是画出来的，不用字体符号（☾ 在微软雅黑下渲染成
+        # 了一个怪模怪样的 C，emoji 又不受控）。
+        self.btn_theme = ThemeToggle(
+            self.head, command=self.toggle_theme,
+            background=SUNKEN, dark=(THEME == "dark"))
         self._theme_win = self.head.create_window(0, 34, anchor="e",
                                                   window=self.btn_theme)
 

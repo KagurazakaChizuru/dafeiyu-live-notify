@@ -11,8 +11,8 @@
 
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 6, 0, 0),
-    prodvers=(1, 6, 0, 0),
+    filevers=(1, 6, 1, 0),
+    prodvers=(1, 6, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -26,12 +26,12 @@ VSVersionInfo(
         '080404B0',
         [StringStruct('CompanyName', 'KagurazakaChizuru'),
          StringStruct('FileDescription', '大肥鱼直播姬 - 开播自动通知 QQ 群'),
-         StringStruct('FileVersion', '1.6.0'),
+         StringStruct('FileVersion', '1.6.1'),
          StringStruct('InternalName', 'dafeiyu-live-notify'),
          StringStruct('LegalCopyright', 'MIT License'),
          StringStruct('OriginalFilename', '大肥鱼直播姬.exe'),
          StringStruct('ProductName', '大肥鱼直播姬'),
-         StringStruct('ProductVersion', '1.6.0')])
+         StringStruct('ProductVersion', '1.6.1')])
     ]),
     VarFileInfo([VarStruct('Translation', [0x0804, 1200])])
   ]
