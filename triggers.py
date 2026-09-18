@@ -500,6 +500,8 @@ class BilibiliRoom:
 
         GET https://api.live.bilibili.com/room/v1/Room/get_info?room_id=<id>
         ->  data.live_status : 0=未开播  1=直播中  2=轮播
+        ->  data.user_cover  : 封面图
+        ->  data.online      : 当前人气
     """
 
     API = "https://api.live.bilibili.com/room/v1/Room/get_info"
@@ -518,6 +520,39 @@ class BilibiliRoom:
                 raw.get("code"), raw.get("message")))
         data = raw.get("data") or {}
         return int(data.get("live_status", 0)), data
+
+    # ---- 从房间信息里取字段。取不到一律返回空，绝不让它抛异常 ----
+
+    @staticmethod
+    def cover_url(data, width=0, height=0):
+        """封面地址。width/height 非零时用图床自带的缩放参数拿小图。
+
+        B站图床支持在 URL 后面缀 ``@<宽>w_<高>h_<裁切模式>.<格式>``，
+        由 CDN 直接切好返回。实测原图 155 KB，``@200w_112h_1c.webp``
+        只有 6.4 KB —— 不用自己下载、缩放，也不依赖 Pillow。
+        """
+        d = data or {}
+        url = str(d.get("user_cover") or d.get("keyframe") or d.get("cover") or "").strip()
+        if not url:
+            return ""
+        if width and height:
+            suffix = "@{}w_{}h_1c.webp".format(int(width), int(height))
+            # 已经是带参数的地址就别叠了
+            if "@" not in url.split("//", 1)[-1]:
+                url = url + suffix
+        return url
+
+    @staticmethod
+    def online(data):
+        """当前人气。取不到返回 0。"""
+        try:
+            return max(0, int((data or {}).get("online") or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def room_title(data):
+        return str((data or {}).get("title") or "").strip()
 
 
 class PlatformWatcher(threading.Thread):
@@ -555,6 +590,8 @@ class PlatformWatcher(threading.Thread):
         self._offline_since = None
         self.last_error = None
         self.last_status = None
+        self.info = {}                  # 最近一次拿到的房间原始信息
+        self.peak_online = 0            # 本场直播的人气峰值
 
     # ---- 对外状态 ----
     def status_text(self):
@@ -565,6 +602,13 @@ class PlatformWatcher(threading.Thread):
         if self.state == "offline":
             return "直播间未开播"
         return "等待首次查询"
+
+    def cover_url(self, width=0, height=0):
+        """当前封面地址（可带缩放参数）。拿不到返回空串。"""
+        return BilibiliRoom.cover_url(self.info, width, height)
+
+    def online_now(self):
+        return BilibiliRoom.online(self.info)
 
     def run(self):
         while not self.stop_event.is_set():
@@ -588,6 +632,13 @@ class PlatformWatcher(threading.Thread):
     def _tick(self, status, data):
         now = time.time()
         self.last_status = status
+        if isinstance(data, dict) and data:
+            self.info = data
+        # 人气峰值只在直播期间统计，断流重连不会把它清零
+        if status == STATUS_LIVE:
+            online = BilibiliRoom.online(data)
+            if online > self.peak_online:
+                self.peak_online = online
 
         if status == STATUS_LIVE:
             self._offline_since = None
@@ -624,6 +675,8 @@ class PlatformWatcher(threading.Thread):
     def _enter_live(self, now, data, fire):
         self.state = "live"
         self.live_since = self._parse_live_time(data) or now
+        # 新的一场，峰值从头算
+        self.peak_online = BilibiliRoom.online(data)
         if fire:
             self.on_status("直播间已开播")
             _log("直播间已开播")

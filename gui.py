@@ -18,6 +18,7 @@ NapCat 的启动和关闭完全由本程序负责，不需要手动开任何东�
 import json
 import os
 import queue
+import re
 import socket
 import subprocess
 import sys
@@ -52,6 +53,11 @@ if not getattr(sys, "frozen", False) and HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import live_notify as core                                    # noqa: E402
+
+try:
+    import games as core_games                                 # noqa: E402
+except ImportError:                # 缺文件时界面只是没有"测试识别"按钮
+    core_games = None
 
 CONFIG_PATH = os.path.join(HERE, "config.json")
 ACCOUNT_FILE = os.path.join(HERE, "_account.txt")
@@ -129,6 +135,27 @@ def card_hint(parent, text, wraplength=790, indent=0, pady=(5, 0)):
                    font=(FONT, 9))
     lbl.pack(anchor="w", padx=(indent, 0), pady=pady)
     return lbl
+
+
+#: 文案框里用单独一行 ``---`` 分隔多套文案。
+_TEMPLATE_SEP = re.compile(r"^\s*-{3,}\s*$", re.M)
+
+
+def split_templates(text):
+    """把「多套文案」文本框切成列表。
+
+    一套文案可以有好几行，所以分隔符必须独占一行，不能按换行切。
+    """
+    blocks = [b.strip("\n") for b in _TEMPLATE_SEP.split(text or "")]
+    return [b for b in blocks if b.strip()]
+
+
+def join_templates(cfg_message):
+    """反向：把配置里的模板拼回文本框内容。"""
+    pool = cfg_message.get("templates") or []
+    if pool:
+        return "\n---\n".join(pool)
+    return cfg_message.get("template") or ""
 
 
 class ScrollFrame(tk.Frame):
@@ -724,7 +751,9 @@ class App:
         check(off, self.var_offline,
               "下播时也发一条（依赖上面的「直播间开播时通知」）")
         card_hint(off, "占位符 {duration} 会自动填成这次播了多久（如「2 小时 15 分钟」），"
-                       "另外 {title} {link} {time} {date} 也可用。",
+                       "{peak} 是本场人气峰值，{game} 是最后在玩的游戏。"
+                       "其中 {game} 和 {peak} 拿不到时，"
+                       "含它的那一整行会自动消失。",
                   indent=24, pady=(3, 8))
         tplrow = tk.Frame(off, background=CARD)
         tplrow.pack(fill="x", padx=(24, 0))
@@ -767,17 +796,107 @@ class App:
         row_label(1, "直播间链接")
         ttk.Entry(grid, textvariable=self.var_link, font=(FONT, 9)).grid(
             row=1, column=1, sticky="we", pady=(8, 0))
-        row_label(2, "消息模板")
-        self.txt_tpl = tk.Text(grid, height=4, wrap="word", font=(FONT, 9),
+        row_label(2, "开播文案")
+        self.txt_tpl = tk.Text(grid, height=6, wrap="word", font=(FONT, 9),
                                background="#FBFCFE", foreground=TEXT,
                                relief="solid", bd=1,
                                highlightthickness=0, insertbackground=TEXT,
                                padx=6, pady=4)
         self.txt_tpl.grid(row=2, column=1, sticky="we", pady=(8, 0))
-        tk.Label(grid, text="可用占位符：{title} {link} {time} {date}　"
-                            "换行写 \\n",
+        tk.Label(grid, text="可用占位符：{title} {link} {game} {time} {date}",
                  background=CARD, foreground=MUTED, font=(FONT, 8),
                  anchor="w").grid(row=3, column=1, sticky="w", pady=(3, 0))
+        tk.Label(grid, text="想写多套就分几段，中间用单独一行 --- 隔开 —— "
+                            "每次开播随机挑一套，免得每次都一模一样",
+                 background=CARD, foreground=MUTED, font=(FONT, 8),
+                 anchor="w").grid(row=4, column=1, sticky="w", pady=(1, 0))
+
+        self.var_cover = tk.BooleanVar()
+        self.var_cover_size = tk.StringVar()
+        tk.Checkbutton(grid, variable=self.var_cover,
+                       text="开播通知里带一张小封面图",
+                       background=CARD, foreground=TEXT, activebackground=CARD,
+                       font=(FONT, 9), anchor="w", selectcolor="white",
+                       highlightthickness=0, bd=0, cursor="hand2").grid(
+            row=5, column=1, sticky="w", pady=(9, 0))
+        tk.Label(grid, text="直接用你 B站直播间的封面，压到很小再发，只有几 KB",
+                 background=CARD, foreground=MUTED, font=(FONT, 8),
+                 anchor="w").grid(row=6, column=1, sticky="w", padx=(24, 0))
+
+        # ---------------- 游戏识别 ----------------
+        g_outer, gcard = make_card(page, "游戏识别　在通知里写清楚「正在玩什么」")
+        g_outer.pack(fill="x", pady=(12, 0))
+
+        self.var_game_on = tk.BooleanVar()
+        self.var_game_change = tk.BooleanVar()
+        self.var_game_ignore = tk.StringVar()
+
+        tk.Checkbutton(gcard, variable=self.var_game_on,
+                       text="自动识别当前在玩的游戏，写进通知里",
+                       background=CARD, foreground=TEXT, activebackground=CARD,
+                       font=(FONT, 10, "bold"), anchor="w", selectcolor="white",
+                       highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
+        card_hint(gcard, "看当前窗口和直播姬/OBS 的场景配置，认不出来就不写这行。"
+                         "全程本机读取，不截图、不上传任何画面。",
+                  indent=24, pady=(3, 0))
+
+        grow = tk.Frame(gcard, background=CARD)
+        grow.pack(anchor="w", padx=(24, 0), pady=(7, 0))
+        ttk.Button(grow, text="测试一下现在认成什么",
+                   command=self.test_game_detect).pack(side="left")
+        self.lbl_game_test = tk.Label(grow, text="", background=CARD,
+                                      foreground=MUTED, font=(FONT, 9, "bold"))
+        self.lbl_game_test.pack(side="left", padx=10)
+
+        tk.Checkbutton(gcard, variable=self.var_game_change,
+                       text="中途换游戏时补一条（不 @ 任何人）",
+                       background=CARD, foreground=TEXT, activebackground=CARD,
+                       font=(FONT, 9), anchor="w", selectcolor="white",
+                       highlightthickness=0, bd=0, cursor="hand2").pack(
+            anchor="w", pady=(11, 0))
+
+        tk.Label(gcard, text="不算游戏的　填 exe 名，逗号分隔（比如虚拟形象软件）",
+                 background=CARD, foreground=TEXT, font=(FONT, 9),
+                 anchor="w").pack(anchor="w", pady=(11, 4))
+        ttk.Entry(gcard, textvariable=self.var_game_ignore,
+                  font=(FONT, 9)).pack(fill="x")
+
+        # ---------------- 开播后二次提醒 ----------------
+        r_outer, rcard = make_card(page, "开播后二次提醒")
+        r_outer.pack(fill="x", pady=(12, 0))
+
+        self.var_reminder_on = tk.BooleanVar()
+        self.var_reminder_minutes = tk.StringVar()
+        self.var_reminder_max = tk.StringVar()
+        self.var_reminder_tpl = tk.StringVar()
+
+        tk.Checkbutton(rcard, variable=self.var_reminder_on,
+                       text="开播一段时间后再提醒一次",
+                       background=CARD, foreground=TEXT, activebackground=CARD,
+                       font=(FONT, 10, "bold"), anchor="w", selectcolor="white",
+                       highlightthickness=0, bd=0, cursor="hand2").pack(anchor="w")
+        card_hint(rcard, "第一波没看到的人还有一次机会。只有在直播间确实还开着"
+                         "的时候才会发。", indent=24, pady=(3, 0))
+
+        rrow = tk.Frame(rcard, background=CARD)
+        rrow.pack(anchor="w", padx=(24, 0), pady=(8, 0))
+        tk.Label(rrow, text="开播后", background=CARD, foreground=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        ttk.Entry(rrow, textvariable=self.var_reminder_minutes,
+                  width=10, font=(FONT, 9)).pack(side="left", padx=5)
+        tk.Label(rrow, text="分钟各一次　本场最多", background=CARD,
+                 foreground=TEXT, font=(FONT, 9)).pack(side="left")
+        ttk.Spinbox(rrow, from_=1, to=20, textvariable=self.var_reminder_max,
+                    width=4).pack(side="left", padx=5)
+        tk.Label(rrow, text="条（含开播那条）", background=CARD,
+                 foreground=MUTED, font=(FONT, 9)).pack(side="left")
+
+        tk.Label(rcard, text="提醒文案", background=CARD, foreground=TEXT,
+                 font=(FONT, 9), anchor="w").pack(anchor="w", pady=(10, 4))
+        ttk.Entry(rcard, textvariable=self.var_reminder_tpl,
+                  font=(FONT, 9)).pack(fill="x")
+        card_hint(rcard, "可用占位符：{game} {link} {title} {time}　"
+                         "默认不 @ 任何人", pady=(4, 0))
 
         # ---------------- 触发与发送 ----------------
         b_outer, beh = make_card(page, "触发与发送")
@@ -1000,13 +1119,27 @@ class App:
         self.var_title.set(m["title"])
         self.var_link.set(m["link"])
         self.txt_tpl.delete("1.0", "end")
-        self.txt_tpl.insert("1.0", m["template"])
+        self.txt_tpl.insert("1.0", join_templates(m))
+        self.var_cover.set(bool(m.get("cover", True)))
         self.var_interval.set(str(int(w["interval_seconds"])))
         self.var_confirm.set(str(int(w["confirm_checks"])))
         self.var_cooldown.set(str(int(b["cooldown_minutes"])))
         self.var_sendgap.set(str(int(b["send_interval_seconds"])))
         self.var_autostart.set(bool(b.get("auto_start", False)))
         self.var_procs.set("，".join(w["processes"]))
+
+        g = self.cfg.get("game") or {}
+        self.var_game_on.set(bool(g.get("enabled", True)))
+        self.var_game_change.set(bool(g.get("announce_change", True)))
+        self.var_game_ignore.set("，".join(g.get("ignore") or []))
+        self.lbl_game_test.config(text="")
+
+        r = self.cfg.get("reminder") or {}
+        self.var_reminder_on.set(bool(r.get("enabled", True)))
+        self.var_reminder_minutes.set("，".join(
+            str(int(x)) for x in (r.get("after_minutes") or [30, 60])))
+        self.var_reminder_max.set(str(int(r.get("max_total", 3) or 3)))
+        self.var_reminder_tpl.set(r.get("template") or "")
 
         t = self.cfg.get("trigger") or {}
         self.var_obs.set(bool(t.get("on_obs_stream", True)))
@@ -1040,7 +1173,51 @@ class App:
         try:
             self.cfg["message"]["title"] = self.var_title.get().strip()
             self.cfg["message"]["link"] = self.var_link.get().strip()
-            self.cfg["message"]["template"] = self.txt_tpl.get("1.0", "end-1c")
+            blocks = split_templates(self.txt_tpl.get("1.0", "end-1c"))
+            if not blocks:
+                raise ValueError("开播文案不能是空的")
+            # 只有一段就写回 template，多段才用 templates —— 这样存出来的
+            # config.json 对只用一套文案的人来说还是原来的样子。
+            self.cfg["message"]["template"] = blocks[0]
+            self.cfg["message"]["templates"] = blocks if len(blocks) > 1 else []
+            self.cfg["message"]["cover"] = bool(self.var_cover.get())
+
+            old_g = self.cfg.get("game") or {}
+            ignore = [x.strip().lower()
+                      for x in re.split(r"[,，、]", self.var_game_ignore.get())
+                      if x.strip()]
+            self.cfg["game"] = {
+                "enabled": bool(self.var_game_on.get()),
+                # 手工映射表界面上不暴露，重写这一块时绝不能弄丢
+                "names": old_g.get("names") or {},
+                "ignore": ignore,
+                "announce_change": bool(self.var_game_change.get()),
+                "change_template": (old_g.get("change_template")
+                                    or "换游戏了，现在打《{game}》"),
+                "change_cooldown_minutes": old_g.get("change_cooldown_minutes", 5),
+            }
+
+            minutes = []
+            for part in re.split(r"[,，、]", self.var_reminder_minutes.get()):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    minutes.append(int(float(part)))
+                except ValueError:
+                    raise ValueError("二次提醒的时间点必须是数字，用逗号分隔，"
+                                     "例如 30,60")
+            minutes = sorted(set(m for m in minutes if m > 0))
+            old_r = self.cfg.get("reminder") or {}
+            self.cfg["reminder"] = {
+                "enabled": bool(self.var_reminder_on.get()),
+                "after_minutes": minutes,
+                "max_total": num(self.var_reminder_max, "二次提醒上限", 1, 20),
+                "template": (self.var_reminder_tpl.get().strip()
+                             or "还在播～ 现在打《{game}》\n{link}"),
+                "at_all": bool(old_r.get("at_all", False)),
+            }
+
             self.cfg["watch"]["interval_seconds"] = num(self.var_interval, "检查间隔", 1, 3600)
             self.cfg["watch"]["confirm_checks"] = num(self.var_confirm, "防抖次数", 1, 100)
             self.cfg["behavior"]["cooldown_minutes"] = num(self.var_cooldown, "冷却时间", 0, 1440)
@@ -1584,6 +1761,34 @@ class App:
             else:
                 self.lbl_conn.config(text="● QQ 未就绪（点下面的按钮会自动启动）",
                                      foreground=MUTED)
+
+        self.run_async(work, done)
+
+    def test_game_detect(self):
+        """点一下，看看现在会被认成在玩什么。"""
+        if core_games is None:
+            self.lbl_game_test.config(text="✘ 缺 games.py", foreground=BAD_COLOR)
+            return
+        self.lbl_game_test.config(text="识别中 …", foreground=MUTED)
+
+        def work():
+            return core_games.detect(self.cfg)
+
+        def done(result):
+            if isinstance(result, BaseException):
+                self.lbl_game_test.config(text="✘ 出错：{}".format(result),
+                                          foreground=BAD_COLOR)
+                return
+            name = (result or {}).get("name")
+            if not name:
+                self.lbl_game_test.config(
+                    text="○ 没认出来（不写这一行）", foreground=MUTED)
+                return
+            win = (result or {}).get("window") or {}
+            self.lbl_game_test.config(
+                text="✔ {}　（{} {}）".format(
+                    name, win.get("class") or "?", win.get("size") or ""),
+                foreground=OK_COLOR)
 
         self.run_async(work, done)
 

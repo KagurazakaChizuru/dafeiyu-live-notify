@@ -27,6 +27,8 @@ import argparse
 import ctypes
 import json
 import os
+import random
+import re
 import subprocess
 import sys
 import threading
@@ -40,6 +42,11 @@ try:
     import triggers                # 触发源（OBS 事件 / 全局快捷键 / 冷却闸门）
 except ImportError:                # 缺文件时降级为纯进程检测
     triggers = None
+
+try:
+    import games                   # 游戏名识别（窗口标题 / 场景文件 / 平台库）
+except ImportError:                # 缺文件时通知里就不带游戏名
+    games = None
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
@@ -260,10 +267,79 @@ def load_config(path):
     message = raw.get("message") or {}
     if not isinstance(message, dict):
         raise ConfigError("message 必须是一个对象。")
+    templates = []
+    for item in (message.get("templates") or []):
+        text = str(item or "")
+        if text.strip():
+            templates.append(text)
+    cover_size = message.get("cover_size") or [200, 112]
+    try:
+        cover_size = [int(cover_size[0]), int(cover_size[1])]
+    except (TypeError, ValueError, IndexError):
+        raise ConfigError("message.cover_size 必须是两个数字，例如 [200, 112]")
     msg_cfg = {
         "template": str(message.get("template") or "我开播啦！大家快来～"),
+        # 多套文案轮换：填了就用它随机挑，避免每次发一模一样、
+        # 群里几轮之后就自动忽略了。
+        "templates": templates,
         "title": str(message.get("title") or ""),
         "link": str(message.get("link") or ""),
+        # 开播通知里带一张小封面。B站图床直接给缩好的图，很便宜。
+        "cover": bool(message.get("cover", True)),
+        "cover_size": cover_size,
+    }
+
+    # --- game：通知里那句"正在玩《XXX》" ---
+    game = raw.get("game") or {}
+    if not isinstance(game, dict):
+        raise ConfigError("game 必须是一个对象。")
+    names_raw = game.get("names") or {}
+    if not isinstance(names_raw, dict):
+        raise ConfigError(
+            'game.names 必须是一个对象，例如 {"farcry6.exe": "孤岛惊魂6"}')
+    ignore_raw = game.get("ignore") or []
+    if not isinstance(ignore_raw, list):
+        raise ConfigError('game.ignore 必须是数组，例如 ["vtube studio.exe"]')
+    game_cfg = {
+        "enabled": bool(game.get("enabled", True)),
+        # 手工映射：exe 名（小写）-> 想显示的名字。优先级最高。
+        "names": {str(k): str(v) for k, v in names_raw.items()},
+        # 长得像游戏但不是的东西（虚拟形象、剪辑软件），列进来永不播报
+        "ignore": [str(x) for x in ignore_raw],
+        # 中途换游戏时补发一条
+        "announce_change": bool(game.get("announce_change", True)),
+        "change_template": str(game.get("change_template")
+                               or "换游戏了，现在打《{game}》"),
+        "change_cooldown_minutes": float(game.get("change_cooldown_minutes", 5) or 0),
+    }
+
+    # --- reminder：开播后隔一段时间再喊一次 ---
+    reminder = raw.get("reminder") or {}
+    if not isinstance(reminder, dict):
+        raise ConfigError("reminder 必须是一个对象。")
+    raw_minutes = reminder.get("after_minutes")
+    if raw_minutes is None:
+        raw_minutes = [30, 60]
+    if not isinstance(raw_minutes, list):
+        raise ConfigError("reminder.after_minutes 必须是数组，例如 [30, 60]")
+    minutes = []
+    for item in raw_minutes:
+        try:
+            val = float(item)
+        except (TypeError, ValueError):
+            raise ConfigError("reminder.after_minutes 里有非数字：{!r}".format(item))
+        if val > 0:
+            minutes.append(val)
+    minutes.sort()
+    reminder_cfg = {
+        "enabled": bool(reminder.get("enabled", True)),
+        "after_minutes": minutes,
+        # 一场直播最多发几条（含开播那条）。断流重连最容易把提醒刷爆，
+        # 所以这个上限是硬性的。
+        "max_total": max(1, int(reminder.get("max_total", 3) or 3)),
+        "template": str(reminder.get("template")
+                        or "还在播～ 现在打《{game}》\n{link}"),
+        "at_all": bool(reminder.get("at_all", False)),
     }
 
     # --- offline_message：下播提示 ---
@@ -358,6 +434,8 @@ def load_config(path):
         "groups": groups,
         "watch": watch_cfg,
         "message": msg_cfg,
+        "game": game_cfg,
+        "reminder": reminder_cfg,
         "behavior": behavior_cfg,
         "control": control_cfg,
         "trigger": trigger_cfg,
@@ -565,21 +643,65 @@ def resolve_role(onebot, group_id, self_id):
 # 消息构造
 # --------------------------------------------------------------------------
 
+def pick_template(cfg, template=None):
+    """挑一条开播文案。配了多套就随机挑一条。
+
+    每次都发一模一样的话，群里刷到第三遍就自动忽略了 —— 人是这样，
+    平台的风控也更喜欢有变化的文本。
+    """
+    if template is not None:
+        return template
+    pool = cfg["message"].get("templates") or []
+    if pool:
+        return random.choice(pool)
+    return cfg["message"]["template"]
+
+
+#: 这些占位符为空时，把它所在的**整行**删掉。
+#: 比如模板写「正在玩《{game}》」，没识别出游戏时那一行整个消失，
+#: 而不是渲染成「正在玩《》」这种残缺的句子。
+DROP_LINE_WHEN_EMPTY = ("game", "peak")
+
+
+def _drop_empty_lines(template, fields):
+    kept = []
+    for line in str(template).split("\n"):
+        for key in DROP_LINE_WHEN_EMPTY:
+            if "{" + key + "}" in line and not str(fields.get(key) or "").strip():
+                line = None
+                break
+        if line is not None:
+            kept.append(line)
+    text = "\n".join(kept)
+    text = re.sub(r"\n{3,}", "\n\n", text)      # 压掉删行留下的连续空行
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    return text.strip("\n")
+
+
 def render_text(cfg, template=None, extra=None):
     """渲染消息文本。
 
-    template 为 None 时用开播通知的模板；extra 用于补充额外占位符
-    （例如下播提示的 {duration}）。
+    template 为 None 时按配置挑一条开播文案；extra 用于补充额外占位符
+    （游戏名 {game}、下播时长 {duration}、人气峰值 {peak}）。
     """
     fields = {
         "title": cfg["message"]["title"],
         "link": cfg["message"]["link"],
         "time": datetime.now().strftime("%H:%M"),
         "date": datetime.now().strftime("%Y-%m-%d"),
+        # 先占成空串：模板里写了但这次没值，也不该报错
+        "game": "",
+        "peak": "",
+        "duration": "",
     }
     if extra:
-        fields.update(extra)
-    tpl = template if template is not None else cfg["message"]["template"]
+        for key, val in extra.items():
+            fields[key] = "" if val is None else str(val)
+
+    chosen = pick_template(cfg, template)
+    tpl = _drop_empty_lines(chosen, fields)
+    if not tpl.strip():
+        tpl = chosen        # 别把整条消息删成空的了
     try:
         return tpl.format(**fields)
     except (KeyError, IndexError, ValueError):
@@ -591,11 +713,14 @@ def render_text(cfg, template=None, extra=None):
         return text
 
 
-def build_message(group, text):
+def build_message(group, text, image=""):
     """按群配置生成 OneBot 消息段数组。
 
     每个 at 段后面都跟一个空格段：QQ 不会自动在 @ 后面补空格，
     不加的话会渲染成 "@全体成员我开播啦" 这种黏在一起的样子。
+
+    image 非空时在**文字后面**补一张图。放最后是有意的：文字和链接先入眼，
+    封面跟在后面把整条消息撑大、更显眼。
     """
     segments = []
     if group["at_all"]:
@@ -606,6 +731,8 @@ def build_message(group, text):
             segments.append({"type": "at", "data": {"qq": str(qq)}})
             segments.append({"type": "text", "data": {"text": " "}})
     segments.append({"type": "text", "data": {"text": text}})
+    if image:
+        segments.append({"type": "image", "data": {"file": image}})
     return segments
 
 
@@ -618,6 +745,8 @@ def describe_message(group, segments):
             parts.append("@全体成员" if qq == "all" else "@" + qq)
         elif seg["type"] == "text":
             parts.append(seg["data"].get("text", ""))
+        elif seg["type"] == "image":
+            parts.append("［封面图］")
     return "".join(parts)
 
 
@@ -626,13 +755,16 @@ def describe_message(group, segments):
 # --------------------------------------------------------------------------
 
 def send_to_groups(cfg, onebot, reason, force_dry=False,
-                   template=None, extra_fields=None, at_all=None):
+                   template=None, extra_fields=None, at_all=None, image=""):
     """向所有启用的群发送通知。返回成功数。
 
-    template / extra_fields / at_all 用于发送另一类消息（目前是下播提示）：
+    template / extra_fields / at_all / image 用于发送另一类消息
+    （下播提示、二次提醒、换游戏播报）：
+
       · template     —— 换一套模板
-      · extra_fields —— 补充额外占位符（如 {duration}）
+      · extra_fields —— 补充额外占位符（{game} / {duration} / {peak}）
       · at_all       —— 覆盖各群自己的 @ 设置；None 表示沿用群配置
+      · image        —— 图片地址，非空时附在文字后面
     """
     dry = cfg["behavior"]["dry_run"] or force_dry
     text = render_text(cfg, template=template, extra=extra_fields)
@@ -652,7 +784,7 @@ def send_to_groups(cfg, onebot, reason, force_dry=False,
             # 覆盖 @ 行为：下播提示默认谁都不 @
             target = dict(group, at_all=bool(at_all),
                           at_list=[] if at_all else [])
-        segments = build_message(target, text)
+        segments = build_message(target, text, image=image)
         preview = describe_message(target, segments)
         label = "{}{}".format(group["group_id"],
                               "（{}）".format(group["note"]) if group["note"] else "")
@@ -852,10 +984,55 @@ def cmd_watch(cfg, stop_event=None):
     # 下播用**独立**闸门：它和开播是两件事，绝不能被开播那份 30 分钟冷却吃掉。
     # 否则「播了 10 分钟就下播」时，下播提示会被静默丢弃。
     offline_gate = triggers.CooldownGate(0) if triggers else None
-    state = {"last_fire": 0.0, "last_offline": 0.0}
+    game_cfg = cfg.get("game") or {}
+    reminder_cfg = cfg.get("reminder") or {}
+    state = {
+        "last_fire": 0.0,
+        "last_offline": 0.0,
+        "live_started": 0.0,        # 本场直播开始的时刻
+        "game": "",                 # 上次识别到的游戏
+        "reminders_done": set(),    # 已经发过的提醒下标
+        "reminders_sent": 0,        # 本场已发条数（含开播那条）
+        "last_game_change": 0.0,
+    }
     obs = None
     hotkey = None
     platform = None
+
+    def detect_game():
+        """认一下现在在玩什么。认不出来返回空串，绝不影响发消息。"""
+        if not game_cfg.get("enabled", True) or games is None:
+            return ""
+        try:
+            result = games.detect(cfg)
+        except Exception as exc:
+            log("游戏识别失败：{}".format(exc), "WARN")
+            return ""
+        name = (result or {}).get("name") or ""
+        if name:
+            win = (result or {}).get("window") or {}
+            log("识别到当前游戏：{}（{} {}）".format(
+                name, win.get("class") or "?", win.get("size") or ""))
+        return name
+
+    def cover_image():
+        """开播通知带的封面小图。拿不到就返回空串，消息照发。"""
+        if not cfg["message"].get("cover", True) or platform is None:
+            return ""
+        try:
+            size = cfg["message"].get("cover_size") or [200, 112]
+            return platform.cover_url(size[0], size[1])
+        except Exception:
+            return ""
+
+    def mark_live_start():
+        """记下本场开播时刻 —— 优先用平台给的真实开播时间。"""
+        started = getattr(platform, "live_since", None) if platform else None
+        state["live_started"] = float(started or time.time())
+        state["game"] = ""
+        state["reminders_done"] = set()
+        state["reminders_sent"] = 0
+        state["last_game_change"] = 0.0
 
     def fire(reason):
         """所有触发源的统一出口：先过冷却闸门，再真正发送。
@@ -870,8 +1047,66 @@ def cmd_watch(cfg, stop_event=None):
                 return False
             gate.mark()
         state["last_fire"] = time.time()
-        send_to_groups(cfg, onebot, reason)
+        mark_live_start()
+        name = detect_game()
+        state["game"] = name
+        send_to_groups(cfg, onebot, reason,
+                       extra_fields={"game": name},
+                       image=cover_image())
         return True
+
+    def check_reminders():
+        """开播后隔一阵补一条：第一波没看到的人还有机会。"""
+        pool = reminder_cfg.get("after_minutes") or []
+        if not reminder_cfg.get("enabled") or not pool:
+            return
+        if platform is None or platform.state != "live":
+            return          # 只有在真的还播着的时候才提醒
+        started = state["live_started"]
+        if not started:
+            return
+        # 开播那条也算一条，所以这里留一格给它的余量
+        if state["reminders_sent"] + 1 >= int(reminder_cfg.get("max_total", 3)):
+            return
+        elapsed = (time.time() - started) / 60.0
+        for idx, minutes in enumerate(pool):
+            if idx in state["reminders_done"] or elapsed < minutes:
+                continue
+            state["reminders_done"].add(idx)
+            state["reminders_sent"] += 1
+            name = detect_game() or state["game"]
+            state["game"] = name
+            log("已开播 {} 分钟，发送二次提醒。".format(int(minutes)))
+            send_to_groups(cfg, onebot,
+                           "开播 {} 分钟后的二次提醒".format(int(minutes)),
+                           template=reminder_cfg.get("template"),
+                           extra_fields={"game": name},
+                           at_all=bool(reminder_cfg.get("at_all", False)))
+            return
+
+    def check_game_change():
+        """中途换了游戏就补一条。默认不 @ 任何人。"""
+        if not game_cfg.get("enabled") or not game_cfg.get("announce_change", True):
+            return
+        if platform is None or platform.state != "live":
+            return
+        name = detect_game()
+        if not name or name == state["game"]:
+            return
+        now = time.time()
+        cooldown = float(game_cfg.get("change_cooldown_minutes", 5) or 0)
+        if state["last_game_change"] and now - state["last_game_change"] < cooldown * 60:
+            log("换游戏了（{}），但还在播报冷却期，只记下不发送。".format(name))
+            state["game"] = name
+            return
+        log("游戏从「{}」变成「{}」，补发一条。".format(state["game"] or "未知", name))
+        state["game"] = name
+        state["last_game_change"] = now
+        send_to_groups(cfg, onebot,
+                       "换游戏：{}".format(name),
+                       template=game_cfg.get("change_template"),
+                       extra_fields={"game": name},
+                       at_all=False)
 
     engine = TriggerEngine(cfg, fire) if tg.get("on_process_start") else None
 
@@ -887,12 +1122,33 @@ def cmd_watch(cfg, stop_event=None):
                 return False
             offline_gate.mark()
         state["last_offline"] = time.time()
+
+        peak = 0
+        if platform is not None:
+            try:
+                peak = int(getattr(platform, "peak_online", 0) or 0)
+            except (TypeError, ValueError):
+                peak = 0
+        # peak 传空串时，模板里含 {peak} 的那一行会被自动删掉，
+        # 而不是渲染成「人气最高 0」
+        extra = {
+            "duration": duration or "一会儿",
+            "game": state.get("game") or "",
+            "peak": peak if peak > 0 else "",
+        }
         send_to_groups(
             cfg, onebot,
-            "直播间已下播（时长 {}）".format(duration or "未知"),
+            "直播间已下播（时长 {}，人气峰值 {}）".format(
+                duration or "未知", peak or "未知"),
             template=offline_cfg.get("template"),
-            extra_fields={"duration": duration or "一会儿"},
+            extra_fields=extra,
             at_all=bool(offline_cfg.get("at_all", False)))
+
+        # 本场结束，把提醒额度收回，等下一场重新算
+        state["live_started"] = 0.0
+        state["reminders_done"] = set()
+        state["reminders_sent"] = 0
+        state["last_game_change"] = 0.0
         return True
 
     def manual_trigger():
@@ -912,6 +1168,14 @@ def cmd_watch(cfg, stop_event=None):
             "platform": platform.status_text() if platform else None,
             "offline_message": bool(offline_cfg.get("enabled", True)),
             "hotkey_ok": hotkey.registered if hotkey else None,
+            "game": state.get("game") or None,
+            "peak_online": int(getattr(platform, "peak_online", 0) or 0) if platform else None,
+            "reminder": {
+                "enabled": bool(reminder_cfg.get("enabled")),
+                "after_minutes": reminder_cfg.get("after_minutes") or [],
+                "sent": state["reminders_sent"],
+                "max_total": reminder_cfg.get("max_total"),
+            },
             "groups": [g["group_id"] for g in cfg["groups"] if g["enabled"]],
             "last_fire": (datetime.fromtimestamp(state["last_fire"]).strftime("%Y-%m-%d %H:%M:%S")
                           if state["last_fire"] else None),
@@ -974,17 +1238,48 @@ def cmd_watch(cfg, stop_event=None):
             "@全体成员" if offline_cfg.get("at_all") else "不 @ 任何人"))
     else:
         log("下播提示：已关闭")
+    if game_cfg.get("enabled", True) and games is not None:
+        idx = games.build_index()
+        log("游戏识别：已开启（场景/平台里认识 {} 个 exe{}）".format(
+            len(idx["by_exe"]),
+            "，换游戏会补发" if game_cfg.get("announce_change", True) else ""))
+    elif games is None:
+        log("游戏识别：未启用（缺 games.py）", "WARN")
+    else:
+        log("游戏识别：已关闭")
+    if cfg["message"].get("templates"):
+        log("开播文案：{} 套随机轮换".format(len(cfg["message"]["templates"])))
+    if cfg["message"].get("cover", True):
+        log("封面小图：已开启")
+    if reminder_cfg.get("enabled") and reminder_cfg.get("after_minutes"):
+        log("二次提醒：开播后 {} 分钟各一次（本场最多 {} 条，含开播这条）".format(
+            "、".join(str(int(m)) for m in reminder_cfg["after_minutes"]),
+            reminder_cfg.get("max_total")))
     if cfg["behavior"]["dry_run"]:
         log("当前是彩排模式（dry_run=true），不会真的发消息。", "WARN")
     log("=" * 62)
 
     try:
+        next_aux = 0.0
         while True:
             if stop_event is not None and stop_event.is_set():
                 log("监控已停止。")
                 break
             if engine is not None:
                 engine.tick()
+            # 二次提醒 / 换游戏播报：15 秒看一次就够了，不必跟着
+            # 进程检测那个 5 秒的节奏跑。
+            now = time.time()
+            if now >= next_aux:
+                next_aux = now + 15.0
+                try:
+                    check_reminders()
+                except Exception as exc:
+                    log("二次提醒出错：{}".format(exc), "ERROR")
+                try:
+                    check_game_change()
+                except Exception as exc:
+                    log("换游戏播报出错：{}".format(exc), "ERROR")
             # 分片 sleep：让"停止监控"能立刻生效，而不是干等满一个间隔
             interval = cfg["watch"]["interval_seconds"] if engine is not None else 1
             deadline = time.time() + interval
@@ -1009,9 +1304,45 @@ def cmd_send(cfg):
     return 0
 
 
+def _preview_extras(cfg):
+    """给彩排用：把 {game} 和封面也一并算出来，看到的就是真要发的东西。"""
+    extra = {}
+    game_cfg = cfg.get("game") or {}
+    if game_cfg.get("enabled", True) and games is not None:
+        try:
+            name = (games.detect(cfg) or {}).get("name") or ""
+        except Exception as exc:
+            name = ""
+            log("游戏识别失败：{}".format(exc), "WARN")
+        extra["game"] = name
+        if name:
+            log("识别到当前游戏：{}".format(name))
+        else:
+            log("没识别出当前游戏（通知里就不写这一行）")
+
+    image = ""
+    room_id = (cfg.get("trigger") or {}).get("room_id")
+    if cfg["message"].get("cover", True) and room_id and triggers is not None:
+        try:
+            size = cfg["message"].get("cover_size") or [200, 112]
+            room = triggers.BilibiliRoom(
+                room_id, proxy=(cfg.get("trigger") or {}).get("platform_proxy", ""))
+            _status, data = room.fetch()
+            image = triggers.BilibiliRoom.cover_url(data, size[0], size[1])
+            log("封面：{}".format(image or "（接口没给封面）"))
+        except Exception as exc:
+            log("取封面失败（不影响彩排）：{}".format(exc), "WARN")
+    return extra, image
+
+
 def cmd_test(cfg):
     log("彩排模式：下面展示将要发送的内容，不会真的发到群里。")
-    send_to_groups(cfg, OneBot(cfg["onebot"]), "彩排（test 命令）", force_dry=True)
+    extra, image = _preview_extras(cfg)
+    send_to_groups(cfg, OneBot(cfg["onebot"]), "彩排（test 命令）",
+                   force_dry=True, extra_fields=extra, image=image)
+    log("提醒文案预览：{}".format(
+        render_text(cfg, template=(cfg.get("reminder") or {}).get("template"),
+                    extra=extra).replace("\n", " / ")))
     log("内容没问题的话，执行  python live_notify.py send  真正发送一次。")
     return 0
 
