@@ -50,7 +50,7 @@ except ImportError:                # 缺文件时通知里就不带游戏名
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 
 def _resolve_base_dir():
     """确定**数据目录**（config.json / logs / napcat 所在处）。
@@ -98,6 +98,28 @@ DEFAULT_PROCESSES = [
 _log_lock = threading.Lock()
 _log_file_path = None
 
+# 日志文件里要打码的东西。
+#
+# 为什么只打码**文件**、不动控制台和界面面板：日志文件是拿来外传的
+# （贴给群友、发给别人看），而里面躺着 NapCat 的 WebUi token 和我们自己的
+# 控制端口 token —— 那等价于「谁拿到谁就能操作」。界面面板是本机的，
+# 用户需要在那里看到完整地址以便复制，所以保持原样。
+_SECRET_PATTERNS = (
+    re.compile(r"((?:token|Token|TOKEN)\s*[=:：]\s*)([A-Za-z0-9_\-\.]{12,})"),
+    re.compile(r"((?:access_token)\"?\s*[=:]\s*\"?)([A-Za-z0-9_\-\.]{12,})"),
+)
+
+
+def redact(msg):
+    """把疑似密钥打码，只留前 6 位。够核对是哪一份，不够拿去用。"""
+    if not isinstance(msg, str):
+        return msg
+    out = msg
+    for pat in _SECRET_PATTERNS:
+        out = pat.sub(lambda m: m.group(1) + m.group(2)[:6] + "…（已打码）", out)
+    return out
+
+
 # GUI 等外部消费者可以注册接收器，把日志实时拿到界面上显示
 _log_sinks = []
 
@@ -137,7 +159,7 @@ def log(msg, level="INFO"):
             try:
                 with open(_log_file_path, "a", encoding="utf-8") as fh:
                     fh.write("[{}] {}\n".format(
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"), line))
+                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"), redact(line)))
             except OSError:
                 pass
     # 在锁外分发，避免接收器内部再调用 log() 造成死锁

@@ -305,6 +305,43 @@ def run_send_retry_tests(path):
     return failures
 
 
+def run_redact_tests():
+    """日志落盘前的密钥打码。
+
+    日志文件是拿来外传的（贴群、发给别人看），而里面躺着 NapCat 的 WebUi token
+    和控制端口 token —— 那个等价于「谁拿到谁就能操作」。所以文件那份要打码，
+    控制台和界面面板保持完整（用户要在那儿复制触发地址）。
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    cases = [
+        ("手动触发地址 http://127.0.0.1:8899/trigger?token="
+         "deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb", True),
+        ("[WebUi] WebUi Token: feedface00ff11ee22dd33cc44bb55aa66ff77ee88dd", True),
+        ('[Config] 加载 {"access_token":"fake0000111122223333"}', True),
+        ("目标群数：3", False),
+        # 误伤检查：路径里有 token 这个词，但它不是密钥
+        (r"日志已保存到 C:\token\abc.txt", False),
+    ]
+    for text, should_mask in cases:
+        out = live_notify.redact(text)
+        masked = "已打码" in out
+        check("{}：{}".format("要打码" if should_mask else "不能误伤", text[:34]),
+              masked == should_mask, repr(out))
+
+    # 打码之后不能再出现完整的原始密钥
+    raw = "deadbeef00112233445566778899aabbccddeeff00112233445566778899aabb"
+    check("原始密钥不会完整留在打码结果里",
+          raw not in live_notify.redact("token=" + raw))
+    return failures
+
+
 def main():
     live_notify._setup_console()          # 先切 UTF-8，否则中文输出会乱码
     path = make_config()
@@ -333,14 +370,19 @@ def main():
     failures = run_engine_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 5/6  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("# 5/7  游戏识别（纯逻辑，不要求有游戏在跑）")
     print("#" * 70)
     failures += run_games_tests()
 
     print("\n" + "#" * 70)
-    print("# 6/6  群发失败重试")
+    print("# 6/7  群发失败重试")
     print("#" * 70)
     failures += run_send_retry_tests(path)
+
+    print("\n" + "#" * 70)
+    print("# 7/7  日志落盘前的密钥打码")
+    print("#" * 70)
+    failures += run_redact_tests()
 
     print("\n" + "=" * 70)
     print("命令退出码：check={check}  test={test}  send={send}".format(**results))

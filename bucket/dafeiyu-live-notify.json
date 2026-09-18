@@ -1,10 +1,10 @@
 {
-    "version": "1.3.0",
+    "version": "1.3.1",
     "description": "开播自动往 QQ 群发 @全体成员 通知，并自动识别当前在玩什么游戏",
     "homepage": "https://github.com/KagurazakaChizuru/dafeiyu-live-notify",
     "license": "MIT",
-    "url": "https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/download/v1.3.0/dafeiyu-live-notify-v1.3.0.zip",
-    "hash": "F7A6E63FBC9DA7F45E6371AD5F6EFF2335DA6B85CAD85D0374BA9813407D054B",
+    "url": "https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/download/v1.3.1/dafeiyu-live-notify-v1.3.1.zip",
+    "hash": "C09BECA290485B8B4A53D2492D667CC597DC1C7B021837772AD62D090CBFFA6C",
     "extract_dir": "dafeiyu-live-notify",
     "bin": [
         [
