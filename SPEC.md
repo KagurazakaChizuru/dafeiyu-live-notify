@@ -704,14 +704,21 @@ python -m PyInstaller --onefile --windowed --icon _build/app.ico \
 用 `_build/_makeicon.ps1` 转成多尺寸 ICO：
 
 - GDI+ `HighQualityBicubic` 缩放（Python 标准库没有图像缩放能力，用系统自带的 GDI+ 免装 Pillow）
-- 圆角裁切（半径 = 边长 × 0.14），带 alpha 透明
+- 圆角裁切（半径 = 边长 × 0.21，跟插画自带的圆角对齐），带 alpha 透明
 - 输出 16/24/32/48/64/128/256 共 7 个尺寸，含 PNG 载荷
-- 成品 `app.ico` 约 240 KB；仓库不放插画源图
+- 成品 `app.ico` 约 270 KB；仓库不放插画源图
 
-> **两个 PowerShell 坑**（脚本注释里也记了）：
+> 圆角半径要**对着源图量**，不能照抄默认值：半径偏小会在四个角留下源图的白底
+> 残边（深色任务栏上特别明显），偏大会把插画外圈那层高光描边切掉。
+> 量法：沿顶边找彩色像素的起点 x，圆角半径 r ≈ x（把 0.14 改成实测比例即可）。
+
+> **三个 PowerShell 坑**（脚本注释里也记了）：
 > 1. 函数 `return` 数组会被自动展开，`byte[]` 变成 `object[]`，
 >    导致 `BinaryWriter.Write` 找不到重载、静默写不进去 —— ICO 只有 118 字节（头部）。
 > 2. 组装载荷时必须显式声明 `[byte[][]]`，否则 `+=` 同样会展开。
+> 3. 脚本存成 **UTF-8 无 BOM** 时，Windows PowerShell 5.1 会按 ANSI 解码，
+>    中文注释被拆坏后直接报 `Missing ')' in function parameter list`。
+>    必须带 BOM（`UTF8Encoding($true)`）。
 
 ### 13.4 体积构成
 
