@@ -17,8 +17,10 @@
 用法：  python _selftest.py
 """
 
+import io
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -418,6 +420,90 @@ def run_click_guard_tests():
     return failures
 
 
+def run_theme_bake_tests():
+    """主题色不许被烤死在默认参数里。
+
+    这个坑长这样：
+
+        def __init__(self, parent, background=BG):
+
+    `BG` 是在**模块导入那一刻**求值的 —— 之后 `apply_theme()` 再改全局量也
+    追不回来，那个控件就永远停在初始主题上。表现出来就是：深色模式下标签栏
+    发白、滚动区底下一整片白。实测踩到过（ScrollFrame 和 TabStrip 各一处）。
+
+    两层检查：
+      静态层 —— 扫源码里的签名，一网打尽这一类写法
+      动态层 —— 真建一个控件，看它跟不跟随主题
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    # ---- 静态层 ----
+    try:
+        import gui
+    except Exception as exc:
+        check("gui.py 能否导入", False, str(exc))
+        return failures
+
+    here = os.path.dirname(os.path.abspath(gui.__file__))
+    source = io.open(os.path.join(here, "gui.py"), encoding="utf-8").read()
+    theme_names = ("BG", "CARD", "SUNKEN", "SURFACE", "BORDER", "TEXT",
+                   "MUTED", "PRIMARY", "PRIMARY_D", "PRIMARY_S", "ACCENT",
+                   "LOG_BG", "LOG_FG", "LOG_BAR", "OK_COLOR", "WARN",
+                   "BAD_COLOR")
+    # 形如  background=BG  或  background=CARD,  或  =SURFACE)
+    pat = re.compile(r"=\s*(" + "|".join(theme_names) + r")\s*[,)]")
+    hits = []
+    for i, line in enumerate(source.split("\n"), 1):
+        stripped = line.strip()
+        if not stripped.startswith("def "):
+            continue
+        if pat.search(line):
+            hits.append("第 {} 行：{}".format(i, stripped[:70]))
+    check("源码里没有把主题色当默认参数的地方", not hits,
+          "；".join(hits) if hits else "")
+
+    # ---- 动态层 ----
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+    except Exception as exc:
+        check("能否建 Tk 根窗口", False, str(exc))
+        return failures
+
+    try:
+        for theme in ("dark", "light"):
+            gui.apply_theme(theme)
+            want_bg = gui.BG.lower()
+            want_surface = gui.SURFACE.lower()
+            sf = gui.ScrollFrame(root)
+            ts = gui.TabStrip(root, ["甲", "乙", "丙"], lambda i: None)
+            got_sf = str(sf.cget("background")).lower()
+            got_ts = str(ts.cget("background")).lower()
+            got_body = str(sf.body.cget("background")).lower()
+            check("{}：ScrollFrame 底色跟随主题".format(theme),
+                  got_sf == want_bg, "期望 {} 实际 {}".format(want_bg, got_sf))
+            check("{}：ScrollFrame 内容区跟随主题".format(theme),
+                  got_body == want_bg, "期望 {} 实际 {}".format(want_bg, got_body))
+            check("{}：TabStrip 底色跟随主题".format(theme),
+                  got_ts == want_bg, "期望 {} 实际 {}".format(want_bg, got_ts))
+            for w in (sf, ts):
+                w.destroy()
+            check("{}：SURFACE 与 BG 不同（分层还在）".format(theme),
+                  want_surface != want_bg)
+        gui.apply_theme("light")
+    finally:
+        root.destroy()
+
+    return failures
+
+
 def main():
     live_notify._setup_console()          # 先切 UTF-8，否则中文输出会乱码
     path = make_config()
@@ -429,9 +515,9 @@ def main():
     results = {}
 
     for idx, (title, argv) in enumerate([
-        ("1/9  自检 check", ["check", "--config", path]),
-        ("2/9  彩排 test（不应真的发出去）", ["test", "--config", path]),
-        ("3/9  真实发送 send", ["send", "--config", path]),
+        ("1/10  自检 check", ["check", "--config", path]),
+        ("2/10  彩排 test（不应真的发出去）", ["test", "--config", path]),
+        ("3/10  真实发送 send", ["send", "--config", path]),
     ], 1):
         print("\n" + "#" * 70)
         print("# " + title)
@@ -441,34 +527,39 @@ def main():
     httpd.shutdown()
 
     print("\n" + "#" * 70)
-    print("# 4/9  触发引擎状态机")
+    print("# 4/10  触发引擎状态机")
     print("#" * 70)
     failures = run_engine_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 5/9  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("# 5/10  游戏识别（纯逻辑，不要求有游戏在跑）")
     print("#" * 70)
     failures += run_games_tests()
 
     print("\n" + "#" * 70)
-    print("# 6/9  群发失败重试")
+    print("# 6/10  群发失败重试")
     print("#" * 70)
     failures += run_send_retry_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 7/9  日志落盘前的密钥打码")
+    print("# 7/10  日志落盘前的密钥打码")
     print("#" * 70)
     failures += run_redact_tests()
 
     print("\n" + "#" * 70)
-    print("# 8/9  圆角抗锯齿")
+    print("# 8/10  圆角抗锯齿")
     print("#" * 70)
     failures += run_corner_tests()
 
     print("\n" + "#" * 70)
-    print("# 9/9  启动豁免期（防止鼠标误触）")
+    print("# 9/10  启动豁免期（防止鼠标误触）")
     print("#" * 70)
     failures += run_click_guard_tests()
+
+    print("\n" + "#" * 70)
+    print("# 10/10  主题色不许被烤死在默认参数里")
+    print("#" * 70)
+    failures += run_theme_bake_tests()
 
     print("\n" + "=" * 70)
     print("命令退出码：check={check}  test={test}  send={send}".format(**results))

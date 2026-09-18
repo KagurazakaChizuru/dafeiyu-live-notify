@@ -1,5 +1,5 @@
 PackageIdentifier: KagurazakaChizuru.DafeiyuLiveNotify
-PackageVersion: 1.6.5
+PackageVersion: 1.6.6
 PackageLocale: zh-CN
 Publisher: KagurazakaChizuru
 PublisherUrl: https://github.com/KagurazakaChizuru
@@ -34,4 +34,4 @@ Tags:
   - streamer
 ReleaseNotesUrl: https://github.com/KagurazakaChizuru/dafeiyu-live-notify/blob/main/CHANGELOG.md
 ManifestType: defaultLocale
-ManifestVersion: 1.6.5
+ManifestVersion: 1.6.6

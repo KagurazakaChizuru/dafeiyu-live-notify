@@ -413,7 +413,10 @@ class ScrollFrame(tk.Frame):
     所以每个设置页都套一层这个，内容矮的时候滚动条自动隐形。
     """
 
-    def __init__(self, parent, background=BG, padx=12, pady=12):
+    def __init__(self, parent, background=None, padx=12, pady=12):
+        # 默认值**不能**写 background=BG：那是在模块导入那一刻求值的，会被
+        # 永久烤成当时那套主题的颜色，apply_theme() 之后再改全局量也追不回来。
+        background = background or BG
         super().__init__(parent, background=background)
         self.canvas = tk.Canvas(self, background=background, bd=0,
                                 highlightthickness=0, takefocus=0)
@@ -830,7 +833,9 @@ class TabStrip(tk.Frame):
     HEIGHT = 38
     BAR_H = 2
 
-    def __init__(self, parent, labels, command, background=BG):
+    def __init__(self, parent, labels, command, background=None):
+        # 同 ScrollFrame：默认参数会在导入时被烤死，必须用 None 占位。
+        background = background or BG
         super().__init__(parent, background=background, height=self.HEIGHT)
         self.pack_propagate(False)
         self.command = command
