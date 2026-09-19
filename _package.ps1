@@ -16,6 +16,14 @@
 #      app/config.json         contains real group IDs
 #      app/_account.txt        contains the bot's QQ number
 #      app/logs/, *.bak        runtime junk and private data
+#      app/_privacy.txt        the pre-commit needle list ITSELF - real room ID,
+#                              bot QQ numbers, control-port tokens, local paths.
+#                              Shipping it publishes exactly what it exists to
+#                              keep out. It did once: the v1.7.5 asset carried
+#                              it. Note the netdisk script's blanket "_*" rule
+#                              cannot be copied here - the standard package
+#                              needs _setup-qq-copy.ps1, _fix-qq-link.ps1 and
+#                              _find-python.bat at run time.
 #
 #  Usage:
 #      powershell -ExecutionPolicy Bypass -File _package.ps1 -Exe <path to exe>
@@ -92,7 +100,7 @@ try {
     $denyDirs = @('.git', '.github', 'dist', 'build', 'napcat', 'qq-napcat',
                   'qq-napcat-private', 'logs', '__pycache__', '_qqcopy_test')
     $denyFiles = @('config.json', '_account.txt', 'gui-error.log',
-                   '.gitignore', '.gitattributes')
+                   '.gitignore', '.gitattributes', '_privacy.txt')
     $denyExt = @('.bak', '.pyc', '.exe', '.zip')
 
     $copied = 0
@@ -118,6 +126,10 @@ try {
     }
     $strayExe = Get-ChildItem $pkgApp -Recurse -File -Filter '*.exe' -ErrorAction SilentlyContinue
     if ($strayExe) { $bad += ($strayExe | ForEach-Object { $_.Name }) }
+    # Deny-listing _privacy.txt is not enough on its own - a rename would walk
+    # straight past a name check. Match the shape as well.
+    $strayPrivate = Get-ChildItem $pkgApp -Recurse -File -Filter '_privacy*' -ErrorAction SilentlyContinue
+    if ($strayPrivate) { $bad += ($strayPrivate | ForEach-Object { $_.Name }) }
     if ($bad.Count -gt 0) {
         throw ("refusing to package - these must not ship: " + ($bad -join ', '))
     }
