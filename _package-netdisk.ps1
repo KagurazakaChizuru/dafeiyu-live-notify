@@ -73,6 +73,9 @@ $skip = @('config.json', '_account.txt', 'gui-error.log',
 Get-ChildItem $App -File |
     Where-Object {
         $_.Name -notin $skip -and
+        # 下划线开头的都是本机工具/私密清单，一个都不能进包。
+        # _privacy.txt 装的正是房间号和 token —— 上一版它漏进去了。
+        $_.Name -notlike '_*' -and
         $_.Name -notlike 'config.json*' -and
         $_.Extension -notin @('.bak', '.log', '.spec')
     } |
