@@ -24,7 +24,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repo = Split-Path -Parent $here
 $art  = Join-Path $here 'banner-art.png'
 $icon = Join-Path $here 'app.ico'
-$out  = Join-Path $repo 'docs\images\banner.png'
+$out  = Join-Path $repo 'docs\images\banner.jpg'
 
 $W = 1280
 $H = 640
@@ -165,7 +165,25 @@ $fTitle.Dispose(); $fSub.Dispose(); $fBody.Dispose(); $fUrl.Dispose()
 $bTitle.Dispose(); $bDim.Dispose()
 $g.Dispose()
 
-$bmp.Save($out, [System.Drawing.Imaging.ImageFormat]::Png)
+# ---- 存 JPEG ---------------------------------------------------------------
+#
+# **不能存 PNG。** 这张图 1.7 MB，而 GitHub 的社交预览有 1 MB 上限。
+# PNG 是无损压缩，对这种照片类的画面本来就不划算 —— 水下全是平滑渐变。
+#
+# q92 是试出来的：再高体积涨得快，再低文字的边缘会出现可见的振铃。
+$codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() |
+         Where-Object { $_.MimeType -eq 'image/jpeg' }
+$encParams = New-Object System.Drawing.Imaging.EncoderParameters -ArgumentList @([int]1)
+$encParams.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter -ArgumentList @(
+    [System.Drawing.Imaging.Encoder]::Quality, [int64]92)
+$bmp.Save($out, $codec, $encParams)
 $bmp.Dispose()
-Write-Host "已生成: $out  ($([Math]::Round((Get-Item $out).Length/1KB,1)) KB, ${W}x${H})"
+
+$kb = [Math]::Round((Get-Item $out).Length/1KB, 1)
+Write-Host "已生成: $out  (${kb} KB, ${W}x${H})"
+if ($kb -gt 1000) {
+    Write-Host "  [WARN] 超过 1 MB，GitHub 社交预览会拒收。把质量降到 88 再试。"
+} else {
+    Write-Host "  OK: under the 1 MB social-preview limit"
+}
 Write-Host "上传位置: 仓库 Settings -> Social preview -> Upload an image"

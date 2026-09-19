@@ -1,6 +1,6 @@
 # 大肥鱼直播姬
 
-![大肥鱼直播姬](docs/images/banner.png)
+![大肥鱼直播姬](docs/images/banner.jpg)
 
 [![Release](https://img.shields.io/github/v/release/KagurazakaChizuru/dafeiyu-live-notify?color=2B8FC7&label=release)](https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/latest)
 [![License](https://img.shields.io/github/license/KagurazakaChizuru/dafeiyu-live-notify?color=2B8FC7)](LICENSE)
