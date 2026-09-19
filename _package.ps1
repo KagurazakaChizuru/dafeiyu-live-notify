@@ -1,4 +1,4 @@
-# ===========================================================================
+﻿# ===========================================================================
 #  Build the release zip that gets attached to a GitHub Release
 # ===========================================================================
 #  What goes in:
@@ -106,7 +106,7 @@ try {
     Write-Host "staged $copied top-level items into app\"
 
     # Repo-facing assets the end user has no use for.
-    foreach ($junk in @('social-preview.png', 'icon-preview.png')) {
+    foreach ($junk in @('social-preview.png', 'icon-preview.png', 'banner-art.png')) {
         Remove-Item (Join-Path $pkgApp "_build\$junk") -Force -ErrorAction SilentlyContinue
     }
 
