@@ -27,7 +27,7 @@ scoop install dafeiyu/dafeiyu-live-notify
 # winget install KagurazakaChizuru.DafeiyuLiveNotify
 ```
 
-![界面](docs/images/screenshot.png)
+![界面](docs/images/screenshot-1.7.2.png)
 
 界面配色是照着二次元的调子做的：天依蓝、圆角、一点回弹动效。
 **顶部那条头图可以换成你自己的** —— 往 `app\` 里丢一对
