@@ -30,3 +30,6 @@ _account.txt
 logs/
 *.log
 gui-error.log
+
+# 提交前隐私自查的模式表 —— 它装的就是不该外传的东西
+_privacy.txt
