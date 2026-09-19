@@ -120,11 +120,11 @@ TEMPLATE_POOLS = {
     # 标题和游戏名跟在后面当"信息"。{room_title} 是直播间真实标题
     # （{title} 是配置里那句固定的），有真的就用真的。
     "live": [
+        "🔴 {hook}\n\n{room_title}\n{room_desc}\n正在玩《{game}》\n{link}",
         "🔴 {hook}\n\n{room_title}\n正在玩《{game}》\n{link}",
-        "🔴 {hook}\n\n正在玩《{game}》\n{link}",
-        "🔴 开播了 —— {hook}\n\n{room_title}\n{link}",
+        "🔴 开播了 —— {hook}\n\n{room_title}\n{room_desc}\n{link}",
         "🔴 {hook}\n\n{room_title}\n{link}",
-        "🔴 开播了\n\n{hook}\n{room_title}\n正在玩《{game}》\n{link}",
+        "🔴 开播了\n\n{hook}\n{room_title}\n{room_desc}\n正在玩《{game}》\n{link}",
         "🔴 {hook}\n\n{title}\n正在玩《{game}》\n{link}",
         "🔴 开播了\n{link}",
         "📢 已开播\n\n{room_title}\n正在玩《{game}》\n{link}",
@@ -601,7 +601,12 @@ def load_config(path):
         "change_templates": [str(x) for x in (game.get("change_templates") or [])]
                             or _own_first(game.get("change_template"),
                                           TEMPLATE_POOLS["change"]),
-        "change_cooldown_minutes": float(game.get("change_cooldown_minutes", 5) or 0),
+        # 默认 0：**不再用"距上次播报多久"去压正常换游戏**。
+        # 实测的坏场景：玩 A 几分钟换 B，被 5 分钟冷却吃掉，群里还以为在玩 A。
+        "change_cooldown_minutes": float(game.get("change_cooldown_minutes", 0) or 0),
+        # 新游戏要稳定这么多秒才播报 —— 这才是防抖该干的事（A→B→A→B 来回跳）。
+        # 默认 20 秒：短到不会漏掉真换游戏，长到能滤掉切窗口时的抖动。
+        "change_settle_seconds": float(game.get("change_settle_seconds", 20) or 0),
     }
 
     # --- reminder：开播后隔一段时间再喊一次 ---
@@ -979,7 +984,9 @@ def pick_template(cfg, template=None):
 #: 这些占位符为空时，把它所在的**整行**删掉。
 #: 比如模板写「正在玩《{game}》」，没识别出游戏时那一行整个消失，
 #: 而不是渲染成「正在玩《》」这种残缺的句子。
-DROP_LINE_WHEN_EMPTY = ("game", "peak")
+# room_title / room_desc 也要列进来：接口偶尔抽风取不到时，模板里那一行
+# 应该整个消失，而不是留一个空行 —— 上一版漏了它们，实测就是这样。
+DROP_LINE_WHEN_EMPTY = ("game", "peak", "room_title", "room_desc", "title")
 
 
 #: 模板里允许出现的占位符。
@@ -998,6 +1005,8 @@ ALLOWED_PLACEHOLDERS = frozenset({
     # B站上**真实的**直播间标题。跟 {title} 不是一回事 ——
     # {title} 是配置里写死的那句，{room_title} 是你此刻在直播间的标题。
     "room_title",
+    # 直播公告 / 简介（已剥掉 HTML）
+    "room_desc",
 })
 
 #: 匹配一对花括号里的内容。不要求里面合法 —— 畸形的也要能抓出来。
@@ -1126,6 +1135,7 @@ def render_text(cfg, template=None, extra=None):
     _hooks = [h for h in (cfg["message"].get("hooks") or []) if h and h.strip()]
     fields["hook"] = random.choice(_hooks) if _hooks else ""
     fields["room_title"] = ""
+    fields["room_desc"] = ""
     # 空串会让「不玩《》了」很难看，给个读得通的兜底
     fields.setdefault("prev_game", "")
     if extra:
@@ -1161,25 +1171,30 @@ def preview_messages(cfg, samples=None):
     s = samples or {}
     game = s.get("game") or "艾尔登法环"
     prev = s.get("prev_game") or "只狼"
+    # 编得像真的：预览要能一眼看出"标题和公告到底进来了没有"。
+    room_t = s.get("room_title") or "【空洞骑士】今天打完螳螂领主"
+    room_d = s.get("room_desc") or "晚上八点开播，打到哪算哪，欢迎来聊"
     game_cfg = cfg.get("game") or {}
     off_cfg = cfg.get("offline_message") or {}
     rem_cfg = cfg.get("reminder") or {}
 
-    items = [("开播通知", render_text(cfg, extra={"game": game}))]
+    items = [("开播通知", render_text(cfg, extra={
+        "game": game, "room_title": room_t, "room_desc": room_d}))]
 
     if off_cfg.get("enabled", True):
         items.append(("下播提示", render_text(
             cfg,
             template=pick_from(off_cfg.get("templates"), off_cfg.get("template"),
                                kind="offline"),
-            extra={"duration": "2 小时 15 分", "peak": 42, "game": game})))
+            extra={"duration": "2 小时 15 分", "peak": 42, "game": game,
+                   "room_title": room_t, "room_desc": room_d})))
 
     if rem_cfg.get("enabled", True):
         items.append(("二次提醒", render_text(
             cfg,
             template=pick_from(rem_cfg.get("templates"), rem_cfg.get("template"),
                                kind="reminder"),
-            extra={"game": game})))
+            extra={"game": game, "room_title": room_t, "room_desc": room_d})))
 
     if game_cfg.get("enabled", True) and game_cfg.get("announce_change", True):
         # 两种都列出来：认得出上一个游戏是什么样、认不出又是什么样。
@@ -1196,6 +1211,11 @@ def preview_messages(cfg, samples=None):
                                game_cfg.get("change_template"),
                                kind="change", avoid=("prev_game",)),
             extra={"game": game, "prev_game": ""})))
+
+    # 再列一条"标题没取到"的 —— 用来验证那一行是**整个消失**，
+    # 而不是留一个空行。取不到标题是常事（接口偶尔抽风）。
+    items.append(("开播通知（没取到标题时）", render_text(
+        cfg, extra={"game": game, "room_title": "", "room_desc": ""})))
 
     return items
 
@@ -1782,6 +1802,8 @@ def cmd_watch(cfg, stop_event=None):
         "reminders_done": set(),    # 已经发过的提醒下标
         "reminders_sent": 0,        # 本场已发条数（含开播那条）
         "last_game_change": 0.0,
+        "pending_game": "",         # 已识别到、但还没稳定够时间的新游戏
+        "pending_since": 0.0,       # 它是从什么时候开始稳定的
         # 最近一次群发的结果（SendResult）。**和 live_started 分开记** ——
         # 「开播了」和「通知送到了」是两件事，混在一起就分不出全丢的情况。
         "last_send": None,
@@ -1807,6 +1829,24 @@ def cmd_watch(cfg, stop_event=None):
                 name, win.get("class") or "?", win.get("size") or ""))
         return name
 
+    def room_title_now():
+        """此刻直播间在用的标题。取不到返回空串，绝不影响发消息。"""
+        if platform is None:
+            return ""
+        try:
+            return platform.room_title()
+        except Exception:
+            return ""
+
+    def room_desc_now():
+        """此刻的直播公告（已剥 HTML）。取不到返回空串。"""
+        if platform is None:
+            return ""
+        try:
+            return platform.room_desc()
+        except Exception:
+            return ""
+
     def cover_image():
         """开播通知带的封面小图。拿不到就返回空串，消息照发。"""
         if not cfg["message"].get("cover", True) or platform is None:
@@ -1825,6 +1865,8 @@ def cmd_watch(cfg, stop_event=None):
         state["reminders_done"] = set()
         state["reminders_sent"] = 0
         state["last_game_change"] = 0.0
+        state["pending_game"] = ""
+        state["pending_since"] = 0.0
 
     def fire(reason):
         """所有触发源的统一出口：先过冷却闸门，再真正发送。
@@ -1851,7 +1893,9 @@ def cmd_watch(cfg, stop_event=None):
         name = detect_game()
         state["game"] = name
         result = send_to_groups(cfg, onebot, reason,
-                                extra_fields={"game": name},
+                                extra_fields={"game": name,
+                                              "room_title": room_title_now(),
+                                              "room_desc": room_desc_now()},
                                 image=cover_image())
         state["last_send"] = result
         state["last_send_lost"] = bool(result.lost)
@@ -1883,7 +1927,9 @@ def cmd_watch(cfg, stop_event=None):
                            "开播 {} 分钟后的二次提醒".format(int(minutes)),
                            template=pick_from(reminder_cfg.get("templates"),
                                    reminder_cfg.get("template")),
-                           extra_fields={"game": name},
+                           extra_fields={"game": name,
+                                         "room_title": room_title_now(),
+                                         "room_desc": room_desc_now()},
                            at_all=bool(reminder_cfg.get("at_all", False)))
             return
 
@@ -1895,12 +1941,35 @@ def cmd_watch(cfg, stop_event=None):
             return
         name = detect_game()
         if not name or name == state["game"]:
+            state["pending_game"] = ""
             return
         now = time.time()
-        cooldown = float(game_cfg.get("change_cooldown_minutes", 5) or 0)
-        if state["last_game_change"] and now - state["last_game_change"] < cooldown * 60:
+
+        # ---- 先过"确认时间"（防抖）----
+        #
+        # 为什么要这一步：切窗口、加载地图、开个网页，都会让窗口标题瞬间
+        # 变成别的东西。直接播报的话群里会看到一串莫名其妙的游戏名。
+        #
+        # 这跟下面那个冷却**不是一回事**：
+        #   settle   —— 这游戏是不是真的换了（管真假）
+        #   cooldown —— 两条播报隔得太近没有（管密度）
+        settle = float(game_cfg.get("change_settle_seconds", 20) or 0)
+        if settle > 0:
+            if state["pending_game"] != name:
+                state["pending_game"] = name
+                state["pending_since"] = now
+                log("识别到《{}》，先观察 {} 秒再决定要不要播报。".format(
+                    name, int(settle)))
+                return
+            if now - state["pending_since"] < settle:
+                return
+
+        cooldown = float(game_cfg.get("change_cooldown_minutes", 0) or 0)
+        if cooldown and state["last_game_change"] and \
+                now - state["last_game_change"] < cooldown * 60:
             log("换游戏了（{}），但还在播报冷却期，只记下不发送。".format(name))
             state["game"] = name
+            state["pending_game"] = ""
             return
         # **先把上一个游戏存下来再覆盖。** 原来是先 `state["game"] = name`
         # 再发送，旧名字当场就没了 —— 文案里想写「从 A 换到 B」也拿不到 A。
@@ -1908,6 +1977,7 @@ def cmd_watch(cfg, stop_event=None):
         log("游戏从「{}」变成「{}」，补发一条。".format(prev or "未知", name))
         state["game"] = name
         state["last_game_change"] = now
+        state["pending_game"] = ""
         send_to_groups(cfg, onebot,
                        "换游戏：{} → {}".format(prev or "未知", name),
                        template=pick_from(

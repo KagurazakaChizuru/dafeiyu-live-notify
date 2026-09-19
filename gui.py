@@ -291,6 +291,7 @@ STATE_RUNNING = "running"
 #    · 必须留 {link}，那是通知里唯一有用的信息
 TEMPLATE_LIBRARY = {
     "live": [
+        ("群文案 + 标题 + 公告", "🔴 {hook}\n\n{room_title}\n{room_desc}\n正在玩《{game}》\n{link}"),
         ("群文案 + 真实标题", "🔴 {hook}\n\n{room_title}\n正在玩《{game}》\n{link}"),
         ("群文案 + 配置标题", "🔴 {hook}\n\n{title}\n正在玩《{game}》\n{link}"),
         ("群文案顶格", "🔴 开播了 —— {hook}\n\n{room_title}\n{link}"),
@@ -2421,7 +2422,7 @@ class App:
         self.txt_tpl.bind("<KeyRelease>", lambda e: self._refresh_pool_hint())
 
         tk.Label(grid,
-                 text="占位符：{title} {link} {game} {time} {date} {tod} {weekday}",
+                 text="占位符：{hook} {room_title} {room_desc} {title} {link} {game} {time} {date} {tod} {weekday}",
                  background=CARD, foreground=MUTED, font=(FONT, 8),
                  anchor="w", justify="left", wraplength=560).grid(
             row=5, column=1, sticky="w", pady=(4, 0))
@@ -2504,6 +2505,7 @@ class App:
         self.var_confirm = tk.StringVar()
         self.var_cooldown = tk.StringVar()
         self.var_change_cd = tk.StringVar()
+        self.var_settle = tk.StringVar()
         self.var_test_qq = tk.StringVar()
         self.var_sendgap = tk.StringVar()
 
@@ -2531,6 +2533,17 @@ class App:
                  foreground=MUTED, font=(FONT, 9)).grid(row=1, column=5,
                                                         columnspan=2, sticky="w",
                                                         padx=(4, 0), pady=(12, 0))
+
+        # 确认时间：新游戏要稳定这么多秒才播报。**这跟冷却不是一回事** ——
+        # 它管"是不是真的换了"（切窗口会瞬间改标题），冷却管"播得太密没有"。
+        tk.Label(bgrid, text="换游戏确认", background=CARD, foreground=TEXT,
+                 font=(FONT, 9)).grid(row=2, column=0, sticky="w", pady=(12, 0))
+        ttk.Spinbox(bgrid, from_=0, to=600, textvariable=self.var_settle,
+                    width=6).grid(row=2, column=1, pady=(12, 0))
+        tk.Label(bgrid, text="秒　新游戏稳定这么久才播报，防切窗口抖动",
+                 background=CARD, foreground=MUTED, font=(FONT, 9)).grid(
+                     row=2, column=2, columnspan=4, sticky="w", padx=(4, 0),
+                     pady=(12, 0))
 
         tk.Label(bgrid, text="多群发送间隔", background=CARD, foreground=TEXT,
                  font=(FONT, 9)).grid(row=1, column=0, sticky="w", pady=(12, 0))
@@ -2896,6 +2909,8 @@ class App:
             self.cfg["message"].get("hooks") or []))
         _gcd = (self.cfg.get("game") or {}).get("change_cooldown_minutes", 5)
         self.var_change_cd.set(str(int(float(_gcd or 0))))
+        self.var_settle.set(str(int(float(
+            (self.cfg.get("game") or {}).get("change_settle_seconds", 20) or 0))))
         self.var_sendgap.set(str(int(b["send_interval_seconds"])))
         self.var_autostart.set(bool(b.get("auto_start", False)))
         self.var_procs.set("，".join(w["processes"]))
@@ -3000,6 +3015,8 @@ class App:
             # 那个字典里还有用户在别处填的游戏名映射，换掉就丢了。
             self.cfg.setdefault("game", {})["change_cooldown_minutes"] = num(
                 self.var_change_cd, "换游戏冷却", 0, 1440)
+            self.cfg.setdefault("game", {})["change_settle_seconds"] = num(
+                self.var_settle, "换游戏确认", 0, 600)
             self.cfg["behavior"]["send_interval_seconds"] = num(self.var_sendgap, "多群发送间隔", 0, 600)
             self.cfg["behavior"]["auto_start"] = bool(self.var_autostart.get())
             raw = self.var_procs.get().replace("，", ",").replace("、", ",")

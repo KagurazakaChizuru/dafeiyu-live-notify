@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import re
+import re
 import socket
 import struct
 import threading
@@ -554,6 +555,37 @@ class BilibiliRoom:
     def room_title(data):
         return str((data or {}).get("title") or "").strip()
 
+    @staticmethod
+    def room_desc(data, limit=120):
+        """直播公告 / 简介。
+
+        **接口给的是 HTML**：实测返回 ``<p>...</p><br>`` 这种。直接塞进
+        QQ 消息里，群友会看到一堆尖括号 —— 必须剥标签、还原实体、压掉
+        多余空白。
+
+        limit 是软上限：超了就在标点处截断，免得一条公告把整条消息顶爆。
+        """
+        raw = str((data or {}).get("description") or "")
+        if not raw:
+            return ""
+        # <br> / </p> 这类换行标签先变成空格，否则"上句下句"会粘在一起
+        txt = re.sub(r"(?i)<br\s*/?>|</p\s*>|</div\s*>", " ", raw)
+        txt = re.sub(r"<[^>]+>", "", txt)                 # 其余标签直接删
+        txt = (txt.replace("&nbsp;", " ").replace("&amp;", "&")
+                  .replace("&lt;", "<").replace("&gt;", ">")
+                  .replace("&quot;", '"').replace("&#39;", "'"))
+        txt = re.sub(r"\s+", " ", txt).strip()
+        if limit and len(txt) > limit:
+            cut = txt[:limit]
+            # 尽量在标点处断，别把词切一半
+            for mark in ("。", "！", "？", "，", ".", "!", "?", ",", " "):
+                pos = cut.rfind(mark)
+                if pos > limit * 0.6:
+                    cut = cut[:pos + 1]
+                    break
+            txt = cut.rstrip() + "…"
+        return txt
+
 
 class PlatformWatcher(threading.Thread):
     """轮询直播间状态，检测「开播」与「下播」两个事件。
@@ -614,6 +646,10 @@ class PlatformWatcher(threading.Thread):
         GUI 上那个「今晚直播」是配置里写死的一句，不是这里的。
         """
         return BilibiliRoom.room_title(self.info)
+
+    def room_desc(self):
+        """直播公告 / 简介（已剥掉 HTML）。取不到返回空串。"""
+        return BilibiliRoom.room_desc(self.info)
 
     def online_now(self):
         return BilibiliRoom.online(self.info)

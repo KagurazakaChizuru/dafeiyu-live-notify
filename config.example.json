@@ -25,7 +25,7 @@
     "stop_grace_seconds": 60
   },
   "message": {
-    "template": "🔴 {hook}\n\n{room_title}\n正在玩《{game}》\n{link}",
+    "template": "🔴 {hook}\n\n{room_title}\n{room_desc}\n正在玩《{game}》\n{link}",
     "templates": [],
     "title": "今晚直播",
       "hooks": [],
@@ -43,7 +43,8 @@
     ],
     "announce_change": true,
     "change_template": "换游戏了，现在打《{game}》",
-    "change_cooldown_minutes": 5
+    "change_cooldown_minutes": 0,
+    "change_settle_seconds": 20
   },
   "reminder": {
     "enabled": true,
