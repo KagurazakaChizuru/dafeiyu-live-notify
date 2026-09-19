@@ -3117,7 +3117,8 @@ class App:
         self.txt_hooks.delete("1.0", "end")
         self.txt_hooks.insert("1.0", "\n---\n".join(
             self.cfg["message"].get("hooks") or []))
-        _gcd = (self.cfg.get("game") or {}).get("change_cooldown_minutes", 5)
+        # 默认 0，跟 load_config 保持一致（界面写 5 会把修复改回去）
+        _gcd = (self.cfg.get("game") or {}).get("change_cooldown_minutes", 0)
         self.var_change_cd.set(str(int(float(_gcd or 0))))
         self.var_settle.set(str(int(float(
             (self.cfg.get("game") or {}).get("change_settle_seconds", 20) or 0))))
@@ -3184,7 +3185,11 @@ class App:
             ignore = [x.strip().lower()
                       for x in re.split(r"[,，、]", self.var_game_ignore.get())
                       if x.strip()]
-            self.cfg["game"] = {
+            # **就地 update，不要整块替换。** 这个字典里还有界面不暴露的键，
+            # 而整块替换只写回它列出的那几个 —— change_templates（换游戏文案池）
+            # 就是这么被吃掉的：用户自己写的换游戏文案，点一次「保存设置」
+            # 就永久消失，而且没有任何提示。
+            self.cfg.setdefault("game", {}).update({
                 "enabled": bool(self.var_game_on.get()),
                 # 手工映射表界面上不暴露，重写这一块时绝不能弄丢
                 "names": old_g.get("names") or {},
@@ -3192,8 +3197,10 @@ class App:
                 "announce_change": bool(self.var_game_change.get()),
                 "change_template": (old_g.get("change_template")
                                     or "换游戏了，现在打《{game}》"),
-                "change_cooldown_minutes": old_g.get("change_cooldown_minutes", 5),
-            }
+                # 默认值与 load_config 对齐（那边是 0：不再用冷却压正常换游戏）。
+                # 这里写 5 的话，界面一保存就把 1.7.5 那个修复又改了回去。
+                "change_cooldown_minutes": old_g.get("change_cooldown_minutes", 0),
+            })
 
             minutes = []
             for part in re.split(r"[,，、]", self.var_reminder_minutes.get()):
@@ -3207,14 +3214,16 @@ class App:
                                      "例如 30,60")
             minutes = sorted(set(m for m in minutes if m > 0))
             old_r = self.cfg.get("reminder") or {}
-            self.cfg["reminder"] = {
+            # 同上：就地 update。reminder.templates（二次提醒文案池）不在下面
+            # 这份键清单里，整块替换会把它连同用户写的句子一起丢掉。
+            self.cfg.setdefault("reminder", {}).update({
                 "enabled": bool(self.var_reminder_on.get()),
                 "after_minutes": minutes,
                 "max_total": num(self.var_reminder_max, "二次提醒上限", 1, 20),
                 "template": (self.var_reminder_tpl.get().strip()
                              or "还在播～ 现在打《{game}》\n{link}"),
                 "at_all": bool(old_r.get("at_all", False)),
-            }
+            })
 
             self.cfg["watch"]["interval_seconds"] = num(self.var_interval, "检查间隔", 1, 3600)
             self.cfg["watch"]["confirm_checks"] = num(self.var_confirm, "防抖次数", 1, 100)
@@ -3246,7 +3255,7 @@ class App:
             # 保留 room_id / poll_seconds / platform_proxy —— 界面上不暴露，
             # 但重写 trigger 块时绝不能把它们弄丢
             old_t = self.cfg.get("trigger") or {}
-            self.cfg["trigger"] = {
+            self.cfg.setdefault("trigger", {}).update({
                 "on_obs_stream": bool(self.var_obs.get()),
                 "on_process_start": bool(self.var_proc.get()),
                 "on_platform_live": bool(self.var_platform.get()),
@@ -3254,19 +3263,21 @@ class App:
                 "room_id": old_t.get("room_id"),
                 "poll_seconds": old_t.get("poll_seconds", 30),
                 "platform_proxy": old_t.get("platform_proxy", ""),
-            }
+            })
             # 下播文案跟开播一样是多条，用单独一行 --- 分隔。
             # 存的时候铺开成 templates 列表 + template（第一条）——
             # **两个都要写**：老版本读的是 template，新版本读的是 templates。
             _oblocks = split_templates(self.txt_offline.get("1.0", "end-1c"))
             old_o = self.cfg.get("offline_message") or {}
-            self.cfg["offline_message"] = {
+            # 同上。这里 template/templates 两个都写，看着没丢东西，
+            # 但 grace_seconds 之类仍在映射里 —— 整块替换迟早出事。
+            self.cfg.setdefault("offline_message", {}).update({
                 "enabled": bool(self.var_offline.get()),
                 "template": "🌙 下播了，谢谢陪播\n今天播了 {duration}",
                 "templates": [],
                 "at_all": bool(self.var_offline_at.get()),
                 "grace_seconds": old_o.get("grace_seconds", 60),
-            }
+            })
             if _oblocks:
                 self.cfg["offline_message"]["templates"] = _oblocks
                 self.cfg["offline_message"]["template"] = _oblocks[0]

@@ -963,6 +963,30 @@ def run_config_safety_tests(path):
     check("抓到勾了轮询没填房间号", "却没填 room_id" in blob)
     check("有 [6/6] 这一节", "[6/6] 配置安全检查" in blob)
 
+    # ---- 保存路径不能吃掉界面不暴露的键 ----
+    #
+    # 这是真事故：_ui_to_cfg 里 game / reminder / trigger / offline_message
+    # 原来都是**整块替换**，而 change_templates（换游戏文案池）和
+    # reminder.templates（二次提醒文案池）不在它写回的键清单里 —— 用户自己
+    # 写的文案，点一次「保存设置」就永久消失，界面上还显示"已保存"。
+    # 静态扫源码：整块替换的写法一旦回来，这里立刻红。
+    try:
+        import gui
+        gui_src = io.open(os.path.join(os.path.dirname(os.path.abspath(gui.__file__)),
+                                       "gui.py"), encoding="utf-8").read()
+    except Exception as exc:
+        check("读得到 gui.py", False, "{}: {}".format(type(exc).__name__, exc))
+        gui_src = ""
+    for _sec in ("game", "reminder", "trigger", "offline_message"):
+        check("_ui_to_cfg 不再整块替换 {} 段".format(_sec),
+              'self.cfg["{}"] = {{'.format(_sec) not in gui_src)
+
+    # ui 段不带出来的话，GUI 保存时会把主题和窗口位置从 config.json 里抹掉
+    _cfg = live_notify.load_config(path)
+    check("load_config 带出 ui 段", isinstance(_cfg.get("ui"), dict))
+    check("load_config 带出 behavior.test_target",
+          "test_target" in (_cfg.get("behavior") or {}))
+
     # 不该误报的：跑一遍正常配置，这几条都不该出现
     lines2 = []
     live_notify.log = spy
@@ -1064,6 +1088,16 @@ def run_widget_presence_tests(path):
                 ok = False
                 detail = "{}: {}".format(type(exc).__name__, exc)
             check("_paint_header 能独立跑通", ok, detail)
+
+            # 动态反证「保存设置不吃配置」：界面不暴露的那两个文案池必须还在。
+            # 上面那几条是静态扫源码，挡的是写法回退；这一条挡的是
+            # "写法对了、但写回的键清单还是漏了"。
+            err = app._ui_to_cfg()
+            check("保存设置当场不报错", not err, str(err))
+            check("保存设置后 change_templates 还在",
+                  "change_templates" in (app.cfg.get("game") or {}))
+            check("保存设置后 reminder.templates 还在",
+                  "templates" in (app.cfg.get("reminder") or {}))
     except Exception as exc:
         check("界面能否建成", False, "{}: {}".format(type(exc).__name__, exc))
     finally:

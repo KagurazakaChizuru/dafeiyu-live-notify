@@ -477,6 +477,39 @@ class ConfigError(Exception):
     pass
 
 
+def _as_bool(val, default=False):
+    """把配置里的值当布尔看。
+
+    **`bool("false")` 是 True。** 手改过 config.json 的人写一个字符串
+    "false"，开关就变成了打开的，而界面上看起来还是关的 —— 静默反着走。
+    JSON 里本该是 true/false，但既然允许手改，就认几个常见写法。
+    """
+    if isinstance(val, str):
+        text = val.strip().lower()
+        if text in ("", "0", "false", "no", "off", "none", "null"):
+            return False
+        if text in ("1", "true", "yes", "on"):
+            return True
+        return True                 # 非空又不认识的字符串，按"开"处理
+    if val is None:
+        return default
+    return bool(val)
+
+
+def _as_num(val, default, where):
+    """把配置里的值转成数字，失败时报出**是哪个键**。
+
+    main() 只捕 ConfigError，裸的 ValueError 会以堆栈退出 —— 手滑写错一个
+    值不该是这种收场。这里统一改成一条人能看懂的配置错误。
+    """
+    if val is None or val == "":
+        val = default
+    try:
+        return type(default)(val)
+    except (TypeError, ValueError):
+        raise ConfigError("{} 必须是数字，当前为：{!r}".format(where, val))
+
+
 def load_config(path):
     if not os.path.isfile(path):
         # 两种情况要给两种说法。**从源码目录直接运行**是最常见的一种 ——
@@ -549,8 +582,8 @@ def load_config(path):
                 raise ConfigError("groups[{}].at_list 里有非数字 QQ 号：{!r}".format(idx, q))
         groups.append({
             "group_id": gid,
-            "enabled": bool(item.get("enabled", True)),
-            "at_all": bool(item.get("at_all", True)),
+            "enabled": _as_bool(item.get("enabled", True), True),
+            "at_all": _as_bool(item.get("at_all", True), True),
             "at_list": clean_at,
             "note": str(item.get("note") or ""),
         })
@@ -574,7 +607,7 @@ def load_config(path):
         return val
 
     watch_cfg = {
-        "enabled": bool(watch.get("enabled", True)),
+        "enabled": _as_bool(watch.get("enabled", True), True),
         "interval_seconds": _num("interval_seconds", 5, 1, 3600),
         "processes": [str(p).lower() for p in procs],
         "confirm_checks": _num("confirm_checks", 2, 1, 100),
@@ -610,7 +643,7 @@ def load_config(path):
                  or list(HOOK_POOL),
         "link": str(message.get("link") or ""),
         # 开播通知里带一张小封面。B站图床直接给缩好的图，很便宜。
-        "cover": bool(message.get("cover", True)),
+        "cover": _as_bool(message.get("cover", True), True),
         "cover_size": cover_size,
     }
 
@@ -626,13 +659,13 @@ def load_config(path):
     if not isinstance(ignore_raw, list):
         raise ConfigError('game.ignore 必须是数组，例如 ["vtube studio.exe"]')
     game_cfg = {
-        "enabled": bool(game.get("enabled", True)),
+        "enabled": _as_bool(game.get("enabled", True), True),
         # 手工映射：exe 名（小写）-> 想显示的名字。优先级最高。
         "names": {str(k): str(v) for k, v in names_raw.items()},
         # 长得像游戏但不是的东西（虚拟形象、剪辑软件），列进来永不播报
         "ignore": [str(x) for x in ignore_raw],
         # 中途换游戏时补发一条
-        "announce_change": bool(game.get("announce_change", True)),
+        "announce_change": _as_bool(game.get("announce_change", True), True),
         "change_template": str(game.get("change_template")
                                or TEMPLATE_POOLS["change"][0]),
         "change_templates": [str(x) for x in (game.get("change_templates") or [])]
@@ -640,10 +673,12 @@ def load_config(path):
                                           TEMPLATE_POOLS["change"]),
         # 默认 0：**不再用"距上次播报多久"去压正常换游戏**。
         # 实测的坏场景：玩 A 几分钟换 B，被 5 分钟冷却吃掉，群里还以为在玩 A。
-        "change_cooldown_minutes": float(game.get("change_cooldown_minutes", 0) or 0),
+        "change_cooldown_minutes": _as_num(game.get("change_cooldown_minutes"),
+                                        0.0, "game.change_cooldown_minutes"),
         # 新游戏要稳定这么多秒才播报 —— 这才是防抖该干的事（A→B→A→B 来回跳）。
         # 默认 20 秒：短到不会漏掉真换游戏，长到能滤掉切窗口时的抖动。
-        "change_settle_seconds": float(game.get("change_settle_seconds", 20) or 0),
+        "change_settle_seconds": _as_num(game.get("change_settle_seconds"),
+                                       20.0, "game.change_settle_seconds"),
     }
 
     # --- reminder：开播后隔一段时间再喊一次 ---
@@ -665,17 +700,18 @@ def load_config(path):
             minutes.append(val)
     minutes.sort()
     reminder_cfg = {
-        "enabled": bool(reminder.get("enabled", True)),
+        "enabled": _as_bool(reminder.get("enabled", True), True),
         "after_minutes": minutes,
         # 一场直播最多发几条（含开播那条）。断流重连最容易把提醒刷爆，
         # 所以这个上限是硬性的。
-        "max_total": max(1, int(reminder.get("max_total", 3) or 3)),
+        "max_total": max(1, _as_num(reminder.get("max_total"), 3,
+                                   "reminder.max_total")),
         "template": str(reminder.get("template")
                         or TEMPLATE_POOLS["reminder"][0]),
         "templates": [str(x) for x in (reminder.get("templates") or [])]
                      or _own_first(reminder.get("template"),
                                    TEMPLATE_POOLS["reminder"]),
-        "at_all": bool(reminder.get("at_all", False)),
+        "at_all": _as_bool(reminder.get("at_all", False), False),
     }
 
     # --- offline_message：下播提示 ---
@@ -687,14 +723,14 @@ def load_config(path):
     except (TypeError, ValueError):
         raise ConfigError("offline_message.grace_seconds 必须是数字。")
     offline_cfg = {
-        "enabled": bool(offline.get("enabled", True)),
+        "enabled": _as_bool(offline.get("enabled", True), True),
         "template": str(offline.get("template")
                         or TEMPLATE_POOLS["offline"][0]),
         "templates": [str(x) for x in (offline.get("templates") or [])]
                      or _own_first(offline.get("template"),
                                    TEMPLATE_POOLS["offline"]),
         # 下播默认不 @ 任何人：没在看直播的人不会关心你几点停
-        "at_all": bool(offline.get("at_all", False)),
+        "at_all": _as_bool(offline.get("at_all", False), False),
         # 状态转离线后先等这么久再确认，用来过滤断流重连造成的假下播
         "grace_seconds": offline_grace,
     }
@@ -718,19 +754,25 @@ def load_config(path):
         raise ConfigError("control 必须是一个对象。")
 
     behavior_cfg = {
-        "cooldown_minutes": float(behavior.get("cooldown_minutes", 30) or 0),
-        "send_interval_seconds": float(behavior.get("send_interval_seconds", 3) or 0),
-        "dry_run": bool(behavior.get("dry_run", False)),
+        "cooldown_minutes": _as_num(behavior.get("cooldown_minutes"),
+                                   30.0, "behavior.cooldown_minutes"),
+        "send_interval_seconds": _as_num(behavior.get("send_interval_seconds"),
+                                         3.0, "behavior.send_interval_seconds"),
+        "dry_run": _as_bool(behavior.get("dry_run", False), False),
         # 打开程序就自动开始监控，不必再点大按钮。
         # 默认关闭：多数人打开界面只是想改设置，不该顺手把 NapCat 也拉起来。
-        "auto_start": bool(behavior.get("auto_start", False)),
+        "auto_start": _as_bool(behavior.get("auto_start", False), False),
+        # 私聊测试发给谁。**这一项以前根本没解析**，而界面又从
+        # self.cfg["behavior"] 里读写它 —— 于是那一栏永远回填不出来，
+        # 而且界面第一次保存就把这个键从 config.json 里删掉了。
+        "test_target": str(behavior.get("test_target") or "").strip(),
     }
     try:
         control_port = int(control.get("port", 8899) or 8899)
     except (TypeError, ValueError):
         raise ConfigError("control.port 必须是数字端口，当前为：{!r}".format(control.get("port")))
     control_cfg = {
-        "enabled": bool(control.get("enabled", True)),
+        "enabled": _as_bool(control.get("enabled", True), True),
         "port": control_port,
         "token": str(control.get("token") or ""),
     }
@@ -762,11 +804,11 @@ def load_config(path):
     trigger_cfg = {
         # 进程检测的硬伤：软件一打开就触发，而人往往还要调设备、试麦。
         # 所以默认关闭，改用更精确的信号。
-        "on_process_start": bool(trigger.get("on_process_start", False)),
-        "on_obs_stream": bool(trigger.get("on_obs_stream", True)),
+        "on_process_start": _as_bool(trigger.get("on_process_start", False), False),
+        "on_obs_stream": _as_bool(trigger.get("on_obs_stream", True), True),
         # 轮询直播间状态。唯一与开播软件无关的触发源，含手机开播。
         # 注意：开启后程序会定期访问直播平台的公开接口（默认直连，不走代理）。
-        "on_platform_live": bool(trigger.get("on_platform_live", False)),
+        "on_platform_live": _as_bool(trigger.get("on_platform_live", False), False),
         "hotkey": str(trigger.get("hotkey") or "").strip().lower(),
         "room_id": room_id,
         "poll_seconds": poll_seconds,
@@ -774,11 +816,24 @@ def load_config(path):
         "platform_proxy": str(trigger.get("platform_proxy") or "").strip(),
     }
 
+    # --- ui：界面主题与窗口位置 ---
+    #
+    # **必须原样带出去。** GUI 保存设置时是把 self.cfg 整个 dump 回文件的，
+    # 而这个 dict 里没有 ui 的话，任何一次「保存」都会把 ui 段从 config.json
+    # 里抹掉 —— 表现就是主题偏好在「保存 → 重启」之后回落浅色。
+    ui_raw = raw.get("ui") or {}
+    if not isinstance(ui_raw, dict):
+        raise ConfigError("ui 必须是一个对象。")
+    ui_cfg = {
+        "theme": str(ui_raw.get("theme") or "light"),
+        "geometry": str(ui_raw.get("geometry") or ""),
+    }
+
     return {
         "onebot": {
             "base_url": base_url,
             "access_token": str(onebot.get("access_token") or ""),
-            "timeout": float(onebot.get("timeout", 10) or 10),
+            "timeout": _as_num(onebot.get("timeout"), 10.0, "onebot.timeout"),
         },
         "groups": groups,
         "watch": watch_cfg,
@@ -789,6 +844,7 @@ def load_config(path):
         "control": control_cfg,
         "trigger": trigger_cfg,
         "offline_message": offline_cfg,
+        "ui": ui_cfg,
         "_path": os.path.abspath(path),
         # 模板里拼错的占位符。这里查出来给 check 用，**不拦启动** ——
         # 一个错别字不该让程序起不来，渲染时还会再削一道。
@@ -1009,12 +1065,17 @@ def pick_template(cfg, template=None):
 
     每次都发一模一样的话，群里刷到第三遍就自动忽略了 —— 人是这样，
     平台的风控也更喜欢有变化的文本。
+
+    **必须走 pick_from(kind="live")**，不能 random.choice 了事：1.7.5 加的
+    深夜池 `live_night` 与周末池 `live_weekend` 只有经过 pick_from 才会被
+    并进来。上一版这两个池子**没有任何调用方** —— 界面上写着"按当前时间
+    自动挑"，实际永远挑不到，等于白写。
     """
     if template is not None:
         return template
     pool = cfg["message"].get("templates") or []
     if pool:
-        return random.choice(pool)
+        return pick_from(pool, cfg["message"]["template"], kind="live")
     return cfg["message"]["template"]
 
 
@@ -1401,7 +1462,9 @@ def send_to_groups(cfg, onebot, reason, force_dry=False,
     active = [g for g in cfg["groups"] if g["enabled"]]
     if not active:
         log("没有任何启用的群（enabled 全是 false），什么都没发。", "WARN")
-        LAST_SEND.update(ok=0, total=0, failed=[], when="", reason=reason)
+        # 别把 when 清掉 —— 那会让界面退回「还没发过通知」，
+        # 连上一次真实发送的结果一起抹了。
+        LAST_SEND.update(ok=0, total=0, failed=[], reason=reason)
         return SendResult(total=0, ok=0, reason=reason, dry=dry)
 
     log("触发原因：{}".format(reason))
@@ -1414,17 +1477,18 @@ def send_to_groups(cfg, onebot, reason, force_dry=False,
         for group in active:
             target = group
             if at_all is not None:
-                target = dict(group, at_all=bool(at_all),
-                              at_list=[] if at_all else [])
+                # 覆盖 @ 行为就是"谁都不 @"（下播/提醒/换游戏都是这个语义）。
+                # 原来写的是 `at_list=[] if at_all else []` —— 两支一模一样，
+                # 写了等于没写，还让人以为 False 时会保留群自己的名单。
+                target = dict(group, at_all=bool(at_all), at_list=[])
             preview = describe_message(target, build_message(target, text,
                                                              image=image))
             label = "{}{}".format(group["group_id"],
                                   "（{}）".format(group["note"]) if group["note"] else "")
             log("  [彩排] {} → {}".format(label, preview.replace("\n", " / ")))
-        log("完成：成功 {}/{}".format(len(active), len(active)))
-        LAST_SEND.update(ok=len(active), total=len(active), failed=[],
-                         when=datetime.now().strftime("%H:%M:%S"),
-                         reason=reason)
+        # **不写 LAST_SEND。** 彩排一条都没发，写进去界面就显示「成功 N/N」，
+        # 与「其实一条都没发」正好相反。留着上一次真实发送的结果更有用。
+        log("彩排结束：{} 个群各渲染了一条，一条都没有发出去。".format(len(active)))
         return SendResult(total=len(active), ok=len(active), reason=reason, dry=True)
 
     ok_count = 0
@@ -1443,8 +1507,7 @@ def send_to_groups(cfg, onebot, reason, force_dry=False,
             target = group
             if at_all is not None:
                 # 覆盖 @ 行为：下播提示默认谁都不 @
-                target = dict(group, at_all=bool(at_all),
-                              at_list=[] if at_all else [])
+                target = dict(group, at_all=bool(at_all), at_list=[])
             segments = build_message(target, text, image=image)
             label = "{}{}".format(group["group_id"],
                                   "（{}）".format(group["note"]) if group["note"] else "")
@@ -1465,6 +1528,11 @@ def send_to_groups(cfg, onebot, reason, force_dry=False,
                 elif attempt == rounds - 1:
                     log("  [失败] {} -> 重试 {} 次仍然发不出去".format(
                         label, len(SEND_RETRY_DELAYS)), "ERROR")
+                else:
+                    # 中间几轮原来一声不响：排查时只看到「第 1 轮失败」，然后
+                    # 直接跳到「重试 N 次仍然发不出去」，中间发生过什么全靠猜。
+                    log("  [失败] {} -> {}（第 {} 轮补发也没成）".format(
+                        label, data, attempt), "WARN")
 
             if idx < len(pending) - 1 and gap > 0:
                 time.sleep(gap)
@@ -1484,9 +1552,14 @@ def send_to_groups(cfg, onebot, reason, force_dry=False,
                      reason=reason)
     if result.lost:
         # **一条都没出去。** 这跟"部分失败"不是一回事：群友一个都没看到，
-        # 而开播这件事已经发生了，不会再重来一次。必须显眼。
+        # 而这件事已经发生了，不会再重来一次。必须显眼。
+        #
+        # 统一在这里调 note_lost()：它以前**一个调用点都没有**，于是二次提醒、
+        # 下播、换游戏那三类全丢时只剩一行空白，没人知道出过事。放在这里
+        # 一次覆盖全部四类。
+        note_lost(result, reason)
         log("完成：{} —— 没有任何群收到通知！".format(result.summary()), "ERROR")
-        log("  开播提示已经错过，不会自动重发。请检查 NapCat 是否在线，"
+        log("  这条提示已经错过，不会自动重发。请检查 NapCat 是否在线，"
             "必要时用「手动推一次」补发。", "ERROR")
     else:
         log("完成：{}".format(result.summary()),
@@ -1943,8 +2016,11 @@ def cmd_watch(cfg, stop_event=None):
         pool = reminder_cfg.get("after_minutes") or []
         if not reminder_cfg.get("enabled") or not pool:
             return
-        if platform is None or platform.state != "live":
-            return          # 只有在真的还播着的时候才提醒
+        # 平台轮询没开、或没解析出房间号时，**不能拿它当闸门** —— 否则只用
+        # OBS 或进程检测的人永远收不到二次提醒，而且没有任何提示。
+        # 平台在跑的时候，才用它确认"确实还播着"。
+        if platform is not None and platform.state != "live":
+            return
         started = state["live_started"]
         if not started:
             return
@@ -1974,7 +2050,9 @@ def cmd_watch(cfg, stop_event=None):
         """中途换了游戏就补一条。默认不 @ 任何人。"""
         if not game_cfg.get("enabled") or not game_cfg.get("announce_change", True):
             return
-        if platform is None or platform.state != "live":
+        # 同 check_reminders：平台没启用时不能拿它当闸门，
+        # 否则换游戏播报永不触发。
+        if platform is not None and platform.state != "live":
             return
         name = detect_game()
         if not name or name == state["game"]:
@@ -2073,8 +2151,19 @@ def cmd_watch(cfg, stop_event=None):
         return True
 
     def manual_trigger():
-        fire("手动触发（控制端口）")
-        return {"ok": True, "message": "已触发一次发送，详见控制台日志"}
+        """控制端口那一下。**返回真实的送达结果。**
+
+        以前无论发没发出去都返回 ok:true —— 手机点一下就显示"已触发"，
+        而群里可能一条都没收到。
+        """
+        result = fire("手动触发（控制端口）")
+        if result is None:
+            return {"ok": False, "sent": False,
+                    "message": "被冷却闸门拦下了，这次没有发送。"}
+        return {"ok": bool(result.ok), "sent": True,
+                "total": result.total, "delivered": result.ok,
+                "failed": list(result.failed), "rounds": result.rounds,
+                "dry": bool(result.dry), "message": result.summary()}
 
     def status():
         return {
