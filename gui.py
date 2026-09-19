@@ -66,7 +66,17 @@ NAPCAT_DIR = os.path.join(HERE, "napcat")
 ERROR_LOG = os.path.join(HERE, "gui-error.log")
 
 MAX_LOG_LINES = 1500
-FONT = "Microsoft YaHei UI"
+#: 界面字体降级链。**按顺序取第一个真实存在的。**
+#:
+#: 系统里没有中文圆体（这是 Windows 的常态），实测比对下来 OPPOSans R 最接近
+#: 「可爱但不花哨」：笔画末端更圆、字面更亲和。微软雅黑偏公文，Noto Light
+#: 是清冷不是可爱。
+#:
+#: 但它不是 Windows 自带的 —— 所以必须有后路。**字体缺失不会报错，只会把
+#: 界面变成一堆方块**，这条链就是防这个的。
+FONT_CANDIDATES = ("OPPOSans R", "Noto Sans SC", "Microsoft YaHei UI")
+FONT = FONT_CANDIDATES[0]
+FONT_FALLBACK = FONT_CANDIDATES[-1]
 
 # 日志用的字体。**绝不能用 Consolas 这类纯西文字体**：Tk 遇到字体里没有的
 # 字形会走系统回退，而回退出来的中文是画在一小块浅色底上的——深色日志框里
@@ -138,16 +148,17 @@ def pick_log_font():
 
 THEMES = {
     "light": {
-        "BG":        "#F7F7F7",   # Fluent 底 #F3F3F3 再亮一点点
-        "CARD":      "#F7F7F7",   # = BG：内容区不再分卡片，靠留白分组
+        "BG":        "#EDF1F6",   # 页面底色：带一点冷调，让白卡片浮起来
+        "HEADER_TOP": "#E3F1FB",  # 顶部那层极淡的天依蓝，往 BG 渐隐
+        "CARD":      "#FFFFFF",   # 卡片：比页面浮一档
         "SUNKEN":    "#F2F2F2",   # 次级面：比底暗一档
         "BORDER":    "#E5E5E5",   # 分隔线，约 6% 黑
         "TEXT":      "#1A1A1A",   # 不用纯黑，纯黑在白底上太硬
         "MUTED":     "#5F5F5F",   # Fluent 的 secondary text 档位
-        "PRIMARY":   "#2B7FD4",   # 系统蓝降饱和一档
-        "PRIMARY_D": "#2268B0",
-        "PRIMARY_S": "#E8F1FB",
-        "ACCENT":    "#D98A1F",   # 图标的琥珀色，压暗到能在白底读
+        "PRIMARY":   "#2B8FC7",   # 天依蓝加深版：压白字 3.59:1，够大字用   # 系统蓝降饱和一档
+        "PRIMARY_D": "#2477A8",
+        "PRIMARY_S": "#E6F4FC",
+        "ACCENT":    "#66CCFF",   # 天依蓝本体，只做装饰：压深字 9.65:1   # 图标的琥珀色，压暗到能在白底读
         "OK":        "#0F7B0F",
         "WARN":      "#9D5D00",
         "BAD":       "#C42B1C",   # Fluent light 的 system red
@@ -160,16 +171,17 @@ THEMES = {
         "LOG_BAR":   "#3A3A3A",
     },
     "dark": {
-        "BG":        "#1F1F1F",   # Fluent 深色底（官方是 #202020）
-        "CARD":      "#1F1F1F",   # = BG：同上
+        "BG":        "#181818",   # 页面底色
+        "HEADER_TOP": "#15262F",  # 深色下的蓝调，比浅色那层更暗更闷
+        "CARD":      "#242424",   # 卡片：比页面浮一档
         "SUNKEN":    "#191919",   # 次级面暗一档
         "BORDER":    "#363636",
         "TEXT":      "#EDEDED",   # 不用纯白，纯白在深底上发炫
         "MUTED":     "#A0A0A0",
-        "PRIMARY":   "#4CA0F0",   # 深色下提亮，否则发闷
-        "PRIMARY_D": "#3A82C8",
-        "PRIMARY_S": "#1E2A38",
-        "ACCENT":    "#E8A33D",
+        "PRIMARY":   "#66CCFF",   # 天依蓝本体：在深底上有 9.14:1，非常好看   # 深色下提亮，否则发闷
+        "PRIMARY_D": "#4FB8E8",
+        "PRIMARY_S": "#16303F",
+        "ACCENT":    "#66CCFF",
         "OK":        "#6CCB8F",
         "WARN":      "#E0A33D",
         "BAD":       "#FF99A4",   # Fluent dark 的 system red
@@ -226,7 +238,7 @@ def apply_theme(name):
     「重新着色」这条路 —— 见 App.rebuild_ui()。启动时则在建界面**之前**
     先调用这里，否则会先按默认主题闪一下。
     """
-    global THEME, BG, CARD, SUNKEN, BORDER, SURFACE, TEXT, MUTED
+    global THEME, BG, CARD, SUNKEN, BORDER, SURFACE, HEADER_TOP, TEXT, MUTED
     global PRIMARY, PRIMARY_D, PRIMARY_S, ACCENT
     global OK_COLOR, WARN, BAD_COLOR, OK_S, WARN_S, BAD_S
     global LOG_BG, LOG_FG, LOG_BAR
@@ -238,6 +250,7 @@ def apply_theme(name):
 
     BG, CARD, SUNKEN, BORDER = t["BG"], t["CARD"], t["SUNKEN"], t["BORDER"]
     SURFACE = t["SURFACE"]
+    HEADER_TOP = t["HEADER_TOP"]
     TEXT, MUTED = t["TEXT"], t["MUTED"]
     PRIMARY, PRIMARY_D, PRIMARY_S = t["PRIMARY"], t["PRIMARY_D"], t["PRIMARY_S"]
     ACCENT = t["ACCENT"]
@@ -320,24 +333,70 @@ TEMPLATE_LIBRARY = {
 #  界面小工具
 # --------------------------------------------------------------------------
 
-def make_card(parent, title=None, padx=0, pady=0, surface=False):
-    """一个内容分组。返回 (容器, 内容区) —— 两个是同一个，兼容旧调用写法。
+class RoundedCard(tk.Frame):
+    """圆角卡片：内容摆在一张抗锯齿的圆角底图上。
 
-    **故意没有边框、没有卡片底。**
+    为什么自绘而不用 ttk.Labelframe：clam 主题下它自带立体边和虚线焦点框，
+    改不干净 —— 跟当初弃用 ttk.Notebook 是同一个理由。
 
-    这是扒了三张真实应用截图之后改的：FluentTerminal 的设置页、Windows 11
-    自己的设置，分组全靠**留白 + 一个标题**，不靠框。DevToys 只在「一格格
-    的工具入口」那种地方用卡片，而且卡片是圆角 8px、比背景略亮、没有描边。
-
-    之前我给每个分组套一圈 1px 描边，一页叠七八个框，界面又重又碎 ——
-    这是整个界面最土的地方。
+    底图复用按钮那套抗锯齿圆角（覆盖率烘焙进图片），所以边缘没有台阶。
+    尺寸变了要重画，但卡片极少改变尺寸，代价可以忽略。
     """
-    bg = SURFACE if surface else BG
-    inner = tk.Frame(parent, background=bg, padx=padx, pady=pady)
+
+    RADIUS = 16
+
+    def __init__(self, parent, fill=None, background=None, padx=18, pady=16):
+        bg = background or BG
+        super().__init__(parent, background=bg)
+        self._fill = fill or CARD
+        self._bg = bg
+        self._padx = padx
+        self._pady = pady
+        self._img = None
+        self.canvas = tk.Canvas(self, highlightthickness=0, bd=0,
+                                background=bg, takefocus=0)
+        self.canvas.pack(fill="both", expand=True)
+        # 内容区底色必须跟卡片一致，否则会露出一块方块
+        self.body = tk.Frame(self.canvas, background=self._fill)
+        self._win = self.canvas.create_window(padx, pady, anchor="nw",
+                                              window=self.body)
+        self.bind("<Configure>", self._redraw)
+        self.body.bind("<Configure>", self._redraw)
+
+    def _redraw(self, _event=None):
+        w = self.winfo_width()
+        h = self.body.winfo_reqheight() + self._pady * 2
+        if w < 8 or h < 8:
+            return
+        self.canvas.configure(height=h)
+        try:
+            img = button_image(w, h, self.RADIUS, self._fill, self._bg)
+        except Exception:
+            return
+        self._img = img                      # 引用要留住，被 GC 就白画了
+        self.canvas.delete("bg")
+        self.canvas.create_image(0, 0, anchor="nw", image=img, tags="bg")
+        self.canvas.tag_lower("bg")
+
+
+def make_card(parent, title=None, padx=18, pady=16, surface=False):
+    """一个圆角卡片分组。返回 (卡片, 内容区) —— 兼容旧调用写法。
+
+    早期这里是无边框的纯留白分组（学 FluentTerminal 的设置页）；二次元化之后
+    改回卡片：**页面底色沉一档、卡片浮一档**，分组靠层次而不是靠线。
+    """
+    card = RoundedCard(parent, padx=padx, pady=pady)
     if title:
-        tk.Label(inner, text=title, background=bg, foreground=TEXT,
-                 font=(FONT, 11, "bold")).pack(anchor="w", pady=(0, 16))
-    return inner, inner
+        row = tk.Frame(card.body, background=CARD)
+        row.pack(anchor="w", fill="x", pady=(0, 14))
+        # 标题前一小段天依蓝，跟页头那道短线呼应。装饰只占 4px，不抢字。
+        bar = tk.Canvas(row, width=4, height=15, background=CARD,
+                        highlightthickness=0, bd=0, takefocus=0)
+        bar.pack(side="left", pady=(2, 0))
+        bar.create_rectangle(0, 0, 4, 15, fill=ACCENT, outline="")
+        tk.Label(row, text=title, background=CARD, foreground=TEXT,
+                 font=(FONT, 11, "bold")).pack(side="left", padx=(9, 0))
+    return card, card.body
 
 
 def page_title(parent, text, hint=""):
@@ -361,7 +420,9 @@ def toggle_row(parent, variable, text, pady=(0, 0), grid=None,
     Windows 11 那种胶囊滑块 —— 那是整个界面里最一眼可辨的 Windows 元素，
     方框打勾会立刻显得像十年前的软件。
     """
-    bg = background or BG
+    # 默认 CARD 不是 BG：这个函数**全都用在卡片里**，默认给页面色的话，
+    # 每一行开关都会在白卡片上拖一条灰带。
+    bg = background or CARD
     box = tk.Frame(parent, background=bg)
     if grid:
         box.grid(row=grid[0], column=grid[1], sticky="w", pady=pady)
@@ -975,7 +1036,10 @@ class ToggleSwitch(tk.Canvas):
 # 「表现力属于移动，不属于颜色」。所以：
 #     位置、尺寸、滑块  → 用 spatial（会弹，有生命力）
 #     颜色、透明度      → 用 effects（不弹，弹了反而眼花）
-SPRING_SPATIAL = (0.6, 800.0)
+# damping 0.6 是 Material 官方最弹的一档（过冲 +8.9%）；二次元要更弹一点，
+# 取 0.5（+15.5%）。实测 0.45 就到 +19.8%，开始像故障而不是活泼了 ——
+# 这条线是算出来的，不是凭手感调的。
+SPRING_SPATIAL = (0.5, 800.0)
 SPRING_SPATIAL_SOFT = (0.8, 380.0)
 SPRING_EFFECTS = (1.0, 3800.0)
 
@@ -1156,6 +1220,86 @@ class Animator:
     def dispose(self):
         """和 RoundedButton.dispose 同名 —— 退出清理时能一视同仁地调。"""
         self.cancel()
+
+
+def png_has_alpha(path):
+    """PNG 有没有透明通道 —— 读 IHDR 的颜色类型字节。
+
+    实测过：丢一张白底图进去，程序照单全收，头部就糊一块白方块。
+    **tkinter 做不到运行时抠图**，所以只能提前提醒，不能默默接受。
+    返回 None 表示"说不好"（不是 PNG，或者读不了）。
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(26)
+    except OSError:
+        return None
+    if len(head) < 26 or head[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    # IHDR 第 25 字节是颜色类型：4 = 灰度+alpha，6 = RGBA
+    return head[25] in (4, 6)
+
+
+def load_header_image():
+    """读整条头部的背景图，返回 (PhotoImage 或 None, 来源路径)。
+
+    **分主题**：先找 header-<主题>.png，再找通用的 header.png。
+
+    为什么非得两张：文字颜色在两套主题里是相反的（浅色深字、深色白字），
+    所以需要**两个方向的遮罩** —— 一张图靠调透明度盖不住两个方向。
+
+    **不做缩放**：tkinter 只能整数倍缩，硬缩反而糟。图按原始尺寸贴左上角，
+    窗口比图宽时右边自然露出渐变。
+    """
+    names = ["header-{}.png".format(THEME), "header.png"]
+    roots = [HERE]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(meipass)
+    roots.append(os.path.join(HERE, "_build"))
+    for root in roots:
+        for name in names:
+            path = os.path.join(root, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                return tk.PhotoImage(file=path), path
+            except Exception:
+                continue
+    return None, None
+
+
+def pick_ui_font():
+    """挑一个真实存在的界面字体。
+
+    **字体缺失不会报错，只会把界面变成一堆方块** —— 这种事故必须在运行时挡掉。
+    查系统字体要有 Tk 根窗口，所以这个函数只能在 root 建好之后调，
+    不能做成模块级常量。
+    """
+    try:
+        import tkinter.font as _tkfont
+        families = set(_tkfont.families())
+    except Exception:
+        return FONT_FALLBACK
+    for name in FONT_CANDIDATES:
+        if name in families:
+            return name
+    return FONT_FALLBACK
+
+
+def load_asset(name):
+    """找一个随程序发布的资源文件。
+
+    跟 set_window_icon 走同一条路：打包后在 sys._MEIPASS，开发时在 _build/。
+    单独抽出来是因为头图也要走这里 —— 否则打好的 exe 里找不到它。
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        path = os.path.join(meipass, name)
+        if os.path.isfile(path):
+            return path
+    path = os.path.join(HERE, "_build", name)
+    return path if os.path.isfile(path) else None
 
 
 def set_window_icon(root):
@@ -1339,6 +1483,10 @@ class App:
         self.root.title("大肥鱼直播姬")
 
         ui = self._peek_ui()
+        # 字体必须在 root 建好之后、_build_ui 之前定下来
+        global FONT
+        FONT = pick_ui_font()
+
         apply_theme(ui.get("theme") or "light")
 
         # 窗口尺寸：没存过就按屏幕大小挑一个合适的初值。
@@ -1479,17 +1627,37 @@ class App:
                   foreground=[("selected", TEXT)])
         style.map("Treeview.Heading", background=[("active", BORDER)])
 
-        # 滚动条
-        for orient in ("Vertical", "Horizontal"):
-            style.configure("{}.TScrollbar".format(orient),
-                            background=BORDER, troughcolor=BG,
-                            bordercolor=BG, arrowcolor=MUTED, borderwidth=0)
+        # ---- 滚动条 ----
+        #
+        # clam 的默认滚动条是「上箭头 + 轨道 + 握把 + 下箭头」四段拼的，握把上
+        # 还有几道横纹 —— 加上立体描边，凑齐了九十年代的样子。
+        #
+        # **光设颜色治不了它**：箭头和横纹是**布局里的独立元素**，不是颜色。
+        # 必须把布局整个换掉，只留轨道和握把。现代滚动条本来也不靠箭头，
+        # 滚轮和拖拽就够了。
+        def _flat_scrollbar(name, thumb, trough, active=None):
+            try:
+                style.layout(name, [
+                    ("Vertical.Scrollbar.trough", {
+                        "sticky": "ns",
+                        "children": [("Vertical.Scrollbar.thumb",
+                                      {"expand": "1", "sticky": "nswe"})],
+                    })
+                ])
+            except tk.TclError:
+                pass
+            style.configure(name, background=thumb, troughcolor=trough,
+                            # 描边全部跟轨道同色 = 视觉上没有描边
+                            bordercolor=trough, lightcolor=trough,
+                            darkcolor=trough, borderwidth=0,
+                            gripcount=0, arrowsize=0)
+            if active:
+                style.map(name, background=[("active", active),
+                                            ("pressed", active)])
+
+        _flat_scrollbar("Vertical.TScrollbar", BORDER, BG, PRIMARY)
         # 日志区是深色的，滚动条得跟着一起深，不然整块黑里插一条白杠
-        style.configure("Log.Vertical.TScrollbar", background=LOG_BAR,
-                        troughcolor=LOG_BG, bordercolor=LOG_BG,
-                        arrowcolor=MUTED, borderwidth=0, arrowsize=12)
-        style.map("Log.Vertical.TScrollbar",
-                  background=[("active", PRIMARY), ("pressed", PRIMARY_D)])
+        _flat_scrollbar("Log.Vertical.TScrollbar", LOG_BAR, LOG_BG, PRIMARY)
 
     def _head_resized(self, _event=None):
         """窗口宽度变了就重刷横幅。
@@ -1566,24 +1734,73 @@ class App:
         dlg.bind("<Escape>", lambda e: dlg.destroy())
         dlg.focus_set()
 
+    def _bg_under(self, x, y, w, h):
+        """头部某一点下面的底色是什么。
+
+        主题按钮是独立控件，它那块**方形**底色必须跟背后的东西对上，
+        否则头图上会浮出一个方块。背后是整条头图就采图，是渐变就算渐变。
+
+        采样点取控件中心：渐变更淡，图片在 30px 内的变化也很小，够用。
+        """
+        def fmt(rgb):
+            try:
+                r, g, b = rgb[0], rgb[1], rgb[2]
+                return "#{:02x}{:02x}{:02x}".format(int(r), int(g), int(b))
+            except (TypeError, ValueError, IndexError):
+                return None
+
+        if self._header_img is not None:
+            try:
+                ix, iy = int(x), int(y)
+                if 0 <= ix < self._header_img.width() and \
+                        0 <= iy < self._header_img.height():
+                    # Tk 的 PhotoImage.get 对 RGB 图返回 (r,g,b)，对调色板图返回
+                    # 颜色名。两种都兜住。
+                    got = fmt(self._header_img.get(ix, iy))
+                    if got:
+                        return got
+            except Exception:
+                pass
+        # 没有头图（或在图外）：退回渐变那一行的颜色
+        return mix(HEADER_TOP, BG, min(1.0, max(0.0, y / max(1, h))))
+
     def _paint_header(self):
         self._head_job = None
         w = self.head.winfo_width()
         h = self.head.winfo_height()
         if w < 4 or h < 4:
             return
-        # 只做一层几乎看不出的明暗过渡，再压一条发丝分隔线。
-        # 这里原来是一整块高饱和紫渐变 —— 典型的「设计抢内容」。
-        paint_gradient(self.head, w, h, SUNKEN, BG, tag="bg")
+        # 顶部一层极淡的天依蓝，往下渐隐到背景色。**只是"一层"** ——
+        # 这里原来是一整块高饱和紫渐变，典型的「设计抢内容」，被拆掉过一次。
+        # 二次元的分寸就在这儿：有颜色，但颜色不参与阅读。
+        paint_gradient(self.head, w, h, HEADER_TOP, BG, tag="bg")
         self.head.tag_lower("bg")
+
+        # 背景图夹在渐变和其它元素之间。
+        #
+        # **顺序不能想当然**：文字是在 _build_ui 里先建好的，而
+        # _paint_header 是之后才跑的 —— 这时新建的图会跑到所有东西**上面**，
+        # 把头部的字全糊掉。所以画完必须把它压回渐变正上方。
+        self.head.delete("hdrpic")
+        if self._header_img is not None:
+            self.head.create_image(0, 0, anchor="nw",
+                                   image=self._header_img, tags="hdrpic")
+            self.head.tag_raise("hdrpic", "bg")
         self.head.delete("hair")
         self.head.create_line(0, h - 1, w, h - 1, fill=BORDER, tags="hair")
-        # 右上角两行要跟着窗口宽度走
-        self.head.coords(self._theme_win, w - 26, 34)
-        # 可能换行的文字限制宽度，否则会顶出画布
-        for lbl in (self.lbl_sources, self.lbl_alert):
-            self.head.itemconfig(lbl.item, width=w - 52)
+        # 主题按钮靠右上角
+        self.head.coords(self._theme_win, w - 30, 34)
+
+        # 主题按钮那块方形底色要跟它背后的东西对上 —— 背后是头图就采图，
+        # 是渐变就算渐变。不然头图上会浮出一个方块（实测踩到过）。
+        self.btn_theme.configure(
+            background=self._bg_under(self.head.coords(self._theme_win)[0],
+                                      34, w, h))
         self.btn_theme.set_dark(THEME == "dark")
+
+        # 可能换行的文字限制宽度，别顶出画布
+        for lbl in (self.lbl_conn, self.lbl_sources, self.lbl_alert):
+            self.head.itemconfig(lbl.item, width=w - 52)
 
     def _build_ui(self):
         self._setup_style()
@@ -1607,12 +1824,12 @@ class App:
         self._title_w = tkfont.Font(family=FONT, size=23,
                                     weight="bold").measure(_title)
         self.lbl_ver = tk.Label(self.head, text="v" + core.VERSION,
-                                background=SUNKEN, foreground=MUTED,
+                                background=HEADER_TOP, foreground=MUTED,
                                 font=(FONT, 9), cursor="hand2")
         self._ver_win = self.head.create_window(
             26 + self._title_w + 12, 40, anchor="w", window=self.lbl_ver)
         self.lbl_ver.bind("<Button-1>", self._on_version_click)
-        # 标题下面一小段琥珀色，是整块头部唯一的彩色
+        # 标题下面一小段天依蓝，是整块头部唯一的彩色
         self.head.create_line(27, 62, 62, 62, fill=ACCENT, width=3,
                               capstyle="round")
         # 状态文字跟 QQ 连接状态**同一行**（右对齐），不跟主题按钮挤一起。
@@ -1626,6 +1843,11 @@ class App:
             26, 106, anchor="w", text="", fill=MUTED, font=(FONT, 9)))
         self.lbl_alert = CanvasLabel(self.head, self.head.create_text(
             26, 128, anchor="w", text="", fill=WARN, font=(FONT, 10, "bold")))
+
+        # 整条头部的背景图。**这一句不能少** —— 少了它 _header_img 就没被赋值，
+        # _paint_header 里访问会抛 AttributeError，而那是 Tk 的回调，
+        # 异常会被吞掉：界面照常启动，只是头图静默消失。
+        self._header_img, self._header_src = load_header_image()
 
         # 右上角：深浅色开关。
         #
@@ -1641,7 +1863,7 @@ class App:
         # 了一个怪模怪样的 C，emoji 又不受控）。
         self.btn_theme = ThemeToggle(
             self.head, command=self.toggle_theme,
-            background=SUNKEN, dark=(THEME == "dark"))
+            background=HEADER_TOP, dark=(THEME == "dark"))
         self._theme_win = self.head.create_window(0, 34, anchor="e",
                                                   window=self.btn_theme)
 
@@ -1777,12 +1999,20 @@ class App:
         ttk.Button(bar, text="打开日志文件夹", width=15,
                    command=self.open_log_dir).pack(side="right", padx=(0, 8))
 
-        # 「上次通知」卡片先占住底边，日志框再 expand 填中间 —— 顺序不能反。
-        # 之前日志框独占整页，内容才两行却撑满一屏，空旷得很难看。
-        self._build_last_send_card(page)
-
-        outer = tk.Frame(page, background=BORDER)
-        outer.pack(fill="both", expand=True)
+        # 日志框：**固定高度，不再 expand**。
+        #
+        # 原来它是 fill="both", expand=True，把中间全吃掉 —— 只有两行内容却
+        # 撑满一屏，空旷得很难看。改成固定 18 行 + 圆角卡片，整页立刻有了呼吸。
+        #
+        # 圆角要看得出来，靠的是"文字区底色跟卡片一致"：卡片是 LOG_BG 的圆角块，
+        # 里面的 Text 也是 LOG_BG，它自己的直角就藏在圆角里了。
+        # **padx/pady 不能给 0。** 给了 0 的话内部 Text 会铺满整张卡片，
+        # 把它自己的直角压在圆角上面 —— 圆角就白做了。
+        # 注意区分：这是"卡片的内边距"，跟 Text 自己的 padx（文字缩进）不是一回事。
+        log_card = RoundedCard(page, fill=LOG_BG, padx=7, pady=7)
+        log_card.pack(fill="x")
+        self._log_lines = 16
+        outer = log_card.body
         # 不用 ScrolledText：它内部挂的是 tk.Scrollbar，在 Windows 上由系统
         # 主题直接绘制，background/troughcolor 一律被忽略，深色日志框右边
         # 会永远吊着一条惨白的系统滚动条。改用 ttk.Scrollbar 手动拼。
@@ -1790,12 +2020,95 @@ class App:
                                     style="Log.Vertical.TScrollbar")
         self.txt_log = tk.Text(
             outer, wrap="word", state="disabled", yscrollcommand=self.sb_log.set,
-            font=(pick_log_font(), 9), background=LOG_BG, foreground=LOG_FG,
+            height=self._log_lines, background=LOG_BG, foreground=LOG_FG,
             insertbackground=LOG_FG, relief="flat", padx=10, pady=8,
-            selectbackground=PRIMARY, borderwidth=0, highlightthickness=0)
+            selectbackground=PRIMARY, borderwidth=0, highlightthickness=0,
+            font=(pick_log_font(), 9))
         self.sb_log.config(command=self.txt_log.yview)
-        self.sb_log.pack(side="right", fill="y", padx=(0, 1), pady=1)
-        self.txt_log.pack(side="left", fill="both", expand=True, padx=(1, 0), pady=1)
+        # 文字区先占满，滚动条按需再插进来 —— 常驻一条滚动条是噪音
+        self.txt_log.pack(side="left", fill="both", expand=True, padx=(6, 0), pady=6)
+        self._log_bar_shown = False
+
+        # 「上次通知」跟在日志下面，**不再钉死在底边** —— 那样中间会空一大块。
+        self._build_last_send_card(page)
+
+        # 页面尺寸一变就重算日志该多高。上面两个约束（内容量、窗口高度）
+        # 只有在这里才拿得到真实数值。
+        self.tab_log.bind("<Configure>", self._fit_log_height)
+
+    def _sync_log_bar(self):
+        """日志装得下就把滚动条收起来。
+
+        内容只有三行却常驻一条滚动条，是纯噪音 —— 现代做法都是按需出现。
+        装不下时才插进去，注意用 before= 保证它在文字区右边而不是跑到下面去。
+        """
+        try:
+            _first, last = self.txt_log.yview()
+        except tk.TclError:
+            return
+        need = last < 0.999
+        if need and not self._log_bar_shown:
+            try:
+                self.sb_log.pack(side="right", fill="y", padx=(0, 6), pady=6,
+                                 before=self.txt_log)
+                self._log_bar_shown = True
+            except tk.TclError:
+                pass
+        elif not need and self._log_bar_shown:
+            try:
+                self.sb_log.pack_forget()
+                self._log_bar_shown = False
+            except tk.TclError:
+                pass
+
+    def _fit_log_height(self, _event=None):
+        """按"内容量"和"窗口高度"一起决定日志框多高。
+
+        固定高度试过，两头不讨好：内容两行时它照样占一大块；窗口矮的时候
+        它又把下面的「上次通知」挤出画面（实测 780x611 就撞上了）。
+
+        所以取两个上限里更小的那个：
+            · 内容量      —— 够放下就行，上限 16 行
+            · 窗口可用高度 —— 减掉标题栏和下面那张卡片，剩下的才是它的
+        下限 5 行，再少就看不见上下文了。
+        """
+        if _event is not None and _event.widget is not self.tab_log:
+            return
+        try:
+            if not self.txt_log.winfo_exists():
+                return
+        except tk.TclError:
+            return
+
+        # 内容行数
+        try:
+            lines = int(str(self.txt_log.index("end-1c")).split(".")[0])
+        except (tk.TclError, ValueError):
+            lines = 1
+        want = max(5, min(16, lines + 1))
+
+        # 可用高度换算成行数
+        try:
+            line_h = tkfont.Font(font=self.txt_log.cget("font")).metrics("linespace")
+        except Exception:
+            line_h = 18
+        if line_h < 6:
+            line_h = 18
+        avail = self.tab_log.winfo_height()
+        if avail > 120:
+            # 扣掉：顶部那行按钮 ~30、圆角卡片内边距 14、
+            #       下面那张卡片 ~92、卡片间距 14、页面上下留白 32、粗算余量 10
+            room = int((avail - 192) // line_h)
+            want = max(5, min(want, max(5, room)))
+
+        if want != getattr(self, "_log_lines", None):
+            self._log_lines = want
+            try:
+                self.txt_log.configure(height=want)
+            except tk.TclError:
+                pass
+        # 高度一变，可滚动与否也跟着变
+        self.root.after_idle(self._sync_log_bar)
 
     def _build_last_send_card(self, parent):
         """「上次通知」卡片 —— 摆在日志框下面，占住底边。
@@ -1804,7 +2117,7 @@ class App:
         「通知到底发出去没有」恰恰是最该一眼看到、而原来只能去日志里翻的事。
         """
         outer, card = make_card(parent)
-        outer.pack(side="bottom", fill="x", pady=(12, 0))
+        outer.pack(fill="x", pady=(14, 0))
         # 留着给「结果变了闪一下」用 —— outer 的底色就是那圈 1px 描边，
         # 闪它等于闪一圈高亮环，只动一个控件，不用挨个改子控件
         self._last_send_outer = outer
@@ -2070,14 +2383,14 @@ class App:
         # 不再放"文案库 + 加进去"那种要用户动手的东西 —— 程序**自带一池文案
         # 自动轮换**，用户想改就直接改上面的框。
         self.lbl_pool = tk.Label(
-            grid, text="", background=BG, foreground=MUTED, font=(FONT, 8),
+            grid, text="", background=CARD, foreground=MUTED, font=(FONT, 8),
             anchor="w", justify="left", wraplength=560)
         self.lbl_pool.grid(row=4, column=1, sticky="w", pady=(8, 0))
         self.txt_tpl.bind("<KeyRelease>", lambda e: self._refresh_pool_hint())
 
         tk.Label(grid,
                  text="占位符：{title} {link} {game} {time} {date}",
-                 background=BG, foreground=MUTED, font=(FONT, 8),
+                 background=CARD, foreground=MUTED, font=(FONT, 8),
                  anchor="w", justify="left", wraplength=560).grid(
             row=5, column=1, sticky="w", pady=(4, 0))
 
@@ -3212,6 +3525,9 @@ class App:
             self.txt_log.delete("1.0", "{}.0".format(total - MAX_LOG_LINES))
         self.txt_log.see("end")
         self.txt_log.config(state="disabled")
+        # 内容变多了：滚动条可能要出现，高度也可能要长
+        self._sync_log_bar()
+        self._fit_log_height()
 
     def _restore_log(self):
         """把内存里那份日志写回新建的面板（换主题用）。"""
@@ -3221,6 +3537,8 @@ class App:
         self.txt_log.insert("end", "\n".join(self.log_tail) + "\n")
         self.txt_log.see("end")
         self.txt_log.config(state="disabled")
+        self._sync_log_bar()
+        self._fit_log_height()
 
     def clear_log(self):
         self.log_tail = []

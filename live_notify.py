@@ -72,7 +72,7 @@ except ImportError:                # 缺文件时通知里就不带游戏名
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 
 def _resolve_base_dir():
     """确定**数据目录**（config.json / logs / napcat 所在处）。
@@ -246,8 +246,15 @@ def _open_log_file():
 
 
 def log(msg, level="INFO"):
-    """同时输出到控制台和日志文件。"""
-    line = "[{}] [{}] {}".format(datetime.now().strftime("%H:%M:%S"), level, msg)
+    """同时输出到控制台和日志文件。
+
+    **时间戳只取一次。** 取两次的话，两次调用正好跨过秒边界时，文件里的
+    「外层时间」会比消息自带的「内层时间」晚一秒，看起来像日志错乱 ——
+    实际只是白多调了一次 now()。实测出现过：
+        [2026-09-19 13:09:35] [13:09:34] [INFO] 界面已启动
+    """
+    now = datetime.now()
+    line = "[{}] [{}] {}".format(now.strftime("%H:%M:%S"), level, msg)
     with _log_lock:
         try:
             print(line, flush=True)
@@ -258,7 +265,7 @@ def log(msg, level="INFO"):
             try:
                 with open(_log_file_path, "a", encoding="utf-8") as fh:
                     fh.write("[{}] {}\n".format(
-                        datetime.now().strftime("%Y-%m-%d %H:%M:%S"), redact(line)))
+                        now.strftime("%Y-%m-%d %H:%M:%S"), redact(line)))
             except OSError:
                 pass
     # 在锁外分发，避免接收器内部再调用 log() 造成死锁
@@ -307,6 +314,16 @@ class ConfigError(Exception):
 
 def load_config(path):
     if not os.path.isfile(path):
+        # 两种情况要给两种说法。**从源码目录直接运行**是最常见的一种 ——
+        # 用户多半只是想打开程序，却点到了仓库里的 gui.py。那时候跟他说
+        # 「请把 config.json 放在程序同目录」是答非所问：他压根不该在这儿跑。
+        here = os.path.dirname(os.path.abspath(path))
+        if os.path.isfile(os.path.join(here, "config.example.json")):
+            raise ConfigError(
+                "找不到配置文件：{}\n\n"
+                "看起来你是**直接从源码目录运行**的。\n"
+                "  · 只是想用程序：关掉这个窗口，双击 大肥鱼直播姬.exe\n"
+                "  · 确实要开发：先执行  copy config.example.json config.json".format(path))
         raise ConfigError(
             "找不到配置文件：{}\n"
             "请把 config.json 放在程序同目录，或用 --config 指定路径。".format(path)

@@ -888,6 +888,88 @@ def run_config_safety_tests(path):
     return failures
 
 
+def run_widget_presence_tests():
+    """控件的「引用」与「创建」必须对得上。
+
+    实测踩到过：删代码时按起止标记整段切，把三个头部标签的**创建**切掉了，
+    引用还在。后果不是崩溃 —— `_build_ui` 照常跑完，只是那三个属性从未存在，
+    于是 `_paint_header` / `_poll_trigger` / `_poll_health` / `done` 全撞
+    AttributeError，用户看到四个错误弹窗，而程序不崩，只是一直报。
+
+    静态层扫源码，动态层真建一个界面挨个 hasattr —— 都要，因为属性也可能是
+    条件创建的，静态看不出来。
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    try:
+        import gui
+    except Exception as exc:
+        check("gui.py 能否导入", False, str(exc))
+        return failures
+
+    here = os.path.dirname(os.path.abspath(gui.__file__))
+    source = io.open(os.path.join(here, "gui.py"), encoding="utf-8").read()
+
+    # ---- 静态层 ----
+    # **先剥掉注释和字符串再扫。** 文档里写着 `self.lbl_xxx` 这种示例，
+    # 直接正则会把示例当成"引用了却没创建"，报一个永远修不掉的假警。
+    try:
+        import io as _io
+        import tokenize
+        pieces = []
+        for tok in tokenize.tokenize(_io.BytesIO(source.encode("utf-8")).readline):
+            if tok.type not in (tokenize.COMMENT, tokenize.STRING):
+                pieces.append(tok.string)
+        code_only = " ".join(pieces)
+    except Exception:
+        code_only = source
+    used = set(re.findall(r"self\.((?:lbl|btn|txt|cmb|tree|sf|var)_\w+)", code_only))
+    created = set(re.findall(r"self\.((?:lbl|btn|txt|cmb|tree|sf|var)_\w+)\s*=", code_only))
+    missing = sorted(used - created)
+    check("源码里没有「引用了却没创建」的控件", not missing,
+          "、".join("self." + m for m in missing[:6]))
+
+    # ---- 动态层 ----
+    try:
+        import tkinter as tk
+        root = tk.Tk()
+        root.withdraw()
+    except Exception as exc:
+        check("能否建 Tk 根窗口", False, str(exc))
+        return failures
+
+    try:
+        app = gui.App(root)
+        root.update()
+        absent = sorted(a for a in used if not hasattr(app, a))
+        check("界面建好之后，这些控件属性都真的在", not absent,
+              "、".join("self." + a for a in absent[:6]))
+
+        # _paint_header 是延迟调度的，单独把它跑一次 —— 它踩过两次坑
+        try:
+            app._paint_header()
+            ok = True
+            detail = ""
+        except Exception as exc:
+            ok = False
+            detail = "{}: {}".format(type(exc).__name__, exc)
+        check("_paint_header 能独立跑通", ok, detail)
+    except Exception as exc:
+        check("界面能否建成", False, "{}: {}".format(type(exc).__name__, exc))
+    finally:
+        root.destroy()
+        del root
+        gc.collect()
+
+    return failures
+
+
 def main():
     live_notify._setup_console()          # 先切 UTF-8，否则中文输出会乱码
     path = make_config()
@@ -899,9 +981,9 @@ def main():
     results = {}
 
     for idx, (title, argv) in enumerate([
-        ("1/14  自检 check", ["check", "--config", path]),
-        ("2/14  彩排 test（不应真的发出去）", ["test", "--config", path]),
-        ("3/14  真实发送 send", ["send", "--config", path]),
+        ("1/15  自检 check", ["check", "--config", path]),
+        ("2/15  彩排 test（不应真的发出去）", ["test", "--config", path]),
+        ("3/15  真实发送 send", ["send", "--config", path]),
     ], 1):
         print("\n" + "#" * 70)
         print("# " + title)
@@ -911,59 +993,64 @@ def main():
     httpd.shutdown()
 
     print("\n" + "#" * 70)
-    print("# 4/14  触发引擎状态机")
+    print("# 4/15  触发引擎状态机")
     print("#" * 70)
     failures = run_engine_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 5/14  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("# 5/15  游戏识别（纯逻辑，不要求有游戏在跑）")
     print("#" * 70)
     failures += run_games_tests()
 
     print("\n" + "#" * 70)
-    print("# 6/14  群发失败重试")
+    print("# 6/15  群发失败重试")
     print("#" * 70)
     failures += run_send_retry_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 7/14  日志落盘前的密钥打码")
+    print("# 7/15  日志落盘前的密钥打码")
     print("#" * 70)
     failures += run_redact_tests()
 
     print("\n" + "#" * 70)
-    print("# 8/14  圆角抗锯齿")
+    print("# 8/15  圆角抗锯齿")
     print("#" * 70)
     failures += run_corner_tests()
 
     print("\n" + "#" * 70)
-    print("# 9/14  启动豁免期（防止鼠标误触）")
+    print("# 9/15  启动豁免期（防止鼠标误触）")
     print("#" * 70)
     failures += run_click_guard_tests()
 
     print("\n" + "#" * 70)
-    print("# 10/14  主题色不许被烤死在默认参数里")
+    print("# 10/15  主题色不许被烤死在默认参数里")
     print("#" * 70)
     failures += run_theme_bake_tests()
 
     print("\n" + "#" * 70)
-    print("# 11/14  模板占位符校验")
+    print("# 11/15  模板占位符校验")
     print("#" * 70)
     failures += run_template_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 12/14  单实例锁")
+    print("# 12/15  单实例锁")
     print("#" * 70)
     failures += run_single_instance_tests()
 
     print("\n" + "#" * 70)
-    print("# 13/14  控制端口认证")
+    print("# 13/15  控制端口认证")
     print("#" * 70)
     failures += run_control_auth_tests()
 
     print("\n" + "#" * 70)
-    print("# 14/14  配置安全检查")
+    print("# 14/15  配置安全检查")
     print("#" * 70)
     failures += run_config_safety_tests(path)
+
+    print("\n" + "#" * 70)
+    print("# 15/15  控件引用与创建必须对得上")
+    print("#" * 70)
+    failures += run_widget_presence_tests()
 
     print("\n" + "=" * 70)
     print("命令退出码：check={check}  test={test}  send={send}".format(**results))

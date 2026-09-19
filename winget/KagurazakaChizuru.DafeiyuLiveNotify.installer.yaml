@@ -1,6 +1,6 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.7.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
 PackageIdentifier: KagurazakaChizuru.DafeiyuLiveNotify
-PackageVersion: 1.7.0
+PackageVersion: 1.7.1
 InstallerLocale: zh-CN
 InstallerType: zip
 NestedInstallerType: portable
@@ -9,7 +9,7 @@ NestedInstallerFiles:
     PortableCommandAlias: dafeiyu
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/download/v1.7.0/dafeiyu-live-notify-v1.7.0.zip
-    InstallerSha256: EB4391359354DFB2B7197ADBE6D1A86FE3331CB1AE738FEF23700D479304B12E
+    InstallerUrl: https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/download/v1.7.1/dafeiyu-live-notify-v1.7.1.zip
+    InstallerSha256: FDED28C07347B82F77D84FCBEDEA00154B9BB8C7A5F11F793315C3F8584F7C0E
 ManifestType: installer
-ManifestVersion: 1.7.0
+ManifestVersion: 1.6.0

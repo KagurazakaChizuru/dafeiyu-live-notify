@@ -1,6 +1,6 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.7.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 PackageIdentifier: KagurazakaChizuru.DafeiyuLiveNotify
-PackageVersion: 1.7.0
+PackageVersion: 1.7.1
 PackageLocale: zh-CN
 Publisher: KagurazakaChizuru
 PublisherUrl: https://github.com/KagurazakaChizuru
@@ -35,4 +35,4 @@ Tags:
   - streamer
 ReleaseNotesUrl: https://github.com/KagurazakaChizuru/dafeiyu-live-notify/blob/main/CHANGELOG.md
 ManifestType: defaultLocale
-ManifestVersion: 1.7.0
+ManifestVersion: 1.6.0
