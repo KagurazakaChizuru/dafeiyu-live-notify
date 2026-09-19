@@ -159,6 +159,8 @@ TEMPLATE_POOLS = {
         "🎉 休息日就该这么过\n\n{room_title}\n正在玩《{game}》\n{link}",
         "🎉 周末不睡懒觉，来打游戏\n\n{hook}\n{room_title}\n{link}",
     ],
+    # 下播 —— 跟开播一样，**不许写死时段**（早上八点下播写成「今晚」是笑话），
+    # 也**别写死人数**。语气比开播松：散场了，可以自嘲、可以催睡。
     "offline": [
         "🌙 下播了，谢谢陪播\n今天播了 {duration}",
         "🌙 下播啦\n\n今天播了 {duration}\n人气最高 {peak}\n谢谢大家",
@@ -166,11 +168,20 @@ TEMPLATE_POOLS = {
         "🥺 播了 {duration}，人还是不多\n谢谢留下来的各位",
         "🌙 战场暂时关闭\n\n本次 {duration}\n最后在玩《{game}》",
         "💗 谢谢陪我的每一个人\n\n播了 {duration}，峰值 {peak}",
+        "🛌 关机睡觉，明天见\n\n今天播了 {duration}",
+        "🍜 下播吃饭去了\n\n播了 {duration}，峰值 {peak}",
+        "🐟 鱼塘关门\n\n今天游了 {duration}\n水下安静了",
+        "🎬 今天的节目到此结束\n\n{duration}，峰值 {peak}\n谢谢收看",
+        "😴 主播电量耗尽\n\n硬撑了 {duration}\n充电去了，明天见",
+        "🌙 收工\n\n{duration}\n明天同一时间，不见不散",
+        "👋 走了走了\n\n今天 {duration}，峰值 {peak}\n晚安",
+        "🎮 手柄放下\n\n播了 {duration}\n最后在玩《{game}》",
     ],
     # 只在 23:00 ~ 05:00 并入
     "offline_night": [
         "💗 谢谢今晚陪我的每一个人\n\n播了 {duration}，峰值 {peak}\n晚安",
         "🌙 下播啦，去睡了\n\n今晚播了 {duration}\n大家也早点休息",
+        "🌙 这个点下播，该睡了\n\n播了 {duration}\n你也早点休息",
     ],
     "reminder": [
         "还在播～\n{link}",

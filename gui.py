@@ -322,7 +322,15 @@ TEMPLATE_LIBRARY = {
         ("预告下次", "🌙 今天就到这\n\n播了 {duration}，峰值 {peak}\n明天见"),
         ("卖惨", "🥺 播了 {duration}，人还是不多\n谢谢留下来的各位"),
         ("中二", "🌙 战场暂时关闭\n\n本次 {duration}\n最后在玩《{game}》"),
-        ("时段", "💗 谢谢陪我到{tod}\n\n播了 {duration}，峰值 {peak}"),
+        ("感恩", "💗 谢谢陪我的每一个人\n\n播了 {duration}，峰值 {peak}"),
+        ("关机", "🛌 关机睡觉，明天见\n\n今天播了 {duration}"),
+        ("吃饭", "🍜 下播吃饭去了\n\n播了 {duration}，峰值 {peak}"),
+        ("鱼塘", "🐟 鱼塘关门\n\n今天游了 {duration}\n水下安静了"),
+        ("节目结束", "🎬 今天的节目到此结束\n\n{duration}，峰值 {peak}\n谢谢收看"),
+        ("电量耗尽", "😴 主播电量耗尽\n\n硬撑了 {duration}\n充电去了，明天见"),
+        ("收工", "🌙 收工\n\n{duration}\n明天同一时间，不见不散"),
+        ("走了走了", "👋 走了走了\n\n今天 {duration}，峰值 {peak}\n晚安"),
+        ("手柄放下", "🎮 手柄放下\n\n播了 {duration}\n最后在玩《{game}》"),
     ],
     "reminder": [
         ("简短", "还在播～\n{link}"),
@@ -2275,6 +2283,51 @@ class App:
             wraplength=740)
         self.lbl_last_send.pack(fill="x", pady=(6, 0))
 
+    def _append_from_library(self, kind, widget):
+        """从文案库里点一条，追加到指定的文本框里。
+
+        追加而不是替换 —— 用户可能已经写了自己那句，替换掉就没了。
+        多条之间用单独一行 --- 分隔，跟读取那边同一套规矩。
+        """
+        items = TEMPLATE_LIBRARY.get(kind) or []
+        if not items:
+            return
+        win = tk.Toplevel(self.root)
+        win.title("文案库")
+        win.configure(background=BG)
+        win.transient(self.root)
+
+        tk.Label(win, text="点一条加进去（不会覆盖你已经写的）",
+                 background=BG, foreground=MUTED, font=(FONT, 9),
+                 anchor="w", padx=14, pady=10).pack(fill="x")
+
+        body = tk.Frame(win, background=BG, padx=14, pady=(0, 12))
+        body.pack(fill="both", expand=True)
+        for label, tpl in items:
+            row = tk.Frame(body, background=CARD, highlightthickness=1,
+                           highlightbackground=BORDER)
+            row.pack(fill="x", pady=(0, 6))
+            tk.Label(row, text=label, width=16, anchor="w", background=CARD,
+                     foreground=PRIMARY, font=(FONT, 9, "bold"),
+                     padx=8, pady=6).pack(side="left")
+            tk.Label(row, text=tpl.replace("\n", " / "), anchor="w",
+                     background=CARD, foreground=TEXT, font=(FONT, 9),
+                     justify="left").pack(side="left", fill="x", expand=True)
+
+            def pick(_e=None, t=tpl):
+                cur = widget.get("1.0", "end-1c").rstrip("\n")
+                sep = "\n---\n" if cur.strip() else ""
+                widget.insert("end", sep + t)
+                win.destroy()
+
+            for w in (row,) + tuple(row.winfo_children()):
+                w.bind("<Button-1>", pick)
+                try:
+                    w.configure(cursor="hand2")
+                except tk.TclError:
+                    pass
+        win.bind("<Escape>", lambda e: win.destroy())
+
     def _refresh_pool_hint(self):
         """告诉用户「现在有几套、是不是在轮换」。"""
         if not hasattr(self, "lbl_pool"):
@@ -2461,10 +2514,29 @@ class App:
                        "拿不到的就不写这一行。"
                        "含它的那一整行会自动消失。",
                   indent=24, pady=(3, 8))
+        # **多行框，跟开播那边对等。** 原来这里是个单行 Entry ——
+        # 连第二条文案都存不下，更别说挑着发。现在能存多条，
+        # 用单独一行 --- 分隔，每次下播随机挑一条。
         tplrow = tk.Frame(off, background=CARD)
         tplrow.pack(fill="x", padx=(24, 0))
-        ttk.Entry(tplrow, textvariable=self.var_offline_tpl,
-                  font=(FONT, 9)).pack(fill="x")
+        self.txt_offline = tk.Text(tplrow, height=5, wrap="word", font=(FONT, 9),
+                                   background=SUNKEN, foreground=TEXT,
+                                   relief="flat", padx=8, pady=6,
+                                   insertbackground=TEXT, borderwidth=0,
+                                   highlightthickness=1,
+                                   highlightbackground=BORDER,
+                                   highlightcolor=PRIMARY)
+        self.txt_offline.pack(fill="x")
+
+        orow = tk.Frame(off, background=CARD)
+        orow.pack(fill="x", padx=(24, 0), pady=(6, 0))
+        ttk.Button(orow, text="从文案库里挑一条加进来", width=22,
+                   command=lambda: self._append_from_library("offline",
+                                                             self.txt_offline)
+                   ).pack(side="left")
+        tk.Label(orow, text="多条用单独一行 --- 分隔，每次随机挑一条",
+                 background=CARD, foreground=MUTED, font=(FONT, 9)).pack(
+                     side="left", padx=8)
 
         toggle_row(off, self.var_offline_at,
                    "@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）",
@@ -3052,7 +3124,8 @@ class App:
         om = self.cfg.get("offline_message") or {}
         self.var_offline.set(bool(om.get("enabled", True)))
         self.var_offline_at.set(bool(om.get("at_all", False)))
-        self.var_offline_tpl.set(om.get("template") or "")
+        self.txt_offline.delete("1.0", "end")
+        self.txt_offline.insert("1.0", join_templates(om))
 
         self._refresh_group_tree()
 
@@ -3157,14 +3230,21 @@ class App:
                 "poll_seconds": old_t.get("poll_seconds", 30),
                 "platform_proxy": old_t.get("platform_proxy", ""),
             }
+            # 下播文案跟开播一样是多条，用单独一行 --- 分隔。
+            # 存的时候铺开成 templates 列表 + template（第一条）——
+            # **两个都要写**：老版本读的是 template，新版本读的是 templates。
+            _oblocks = split_templates(self.txt_offline.get("1.0", "end-1c"))
             old_o = self.cfg.get("offline_message") or {}
             self.cfg["offline_message"] = {
                 "enabled": bool(self.var_offline.get()),
-                "template": (self.var_offline_tpl.get().strip()
-                              or "🌙 下播啦，今天播了 {duration}"),
+                "template": "🌙 下播了，谢谢陪播\n今天播了 {duration}",
+                "templates": [],
                 "at_all": bool(self.var_offline_at.get()),
                 "grace_seconds": old_o.get("grace_seconds", 60),
             }
+            if _oblocks:
+                self.cfg["offline_message"]["templates"] = _oblocks
+                self.cfg["offline_message"]["template"] = _oblocks[0]
         except ValueError as exc:
             return str(exc)
         return None
