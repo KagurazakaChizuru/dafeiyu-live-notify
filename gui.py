@@ -3596,9 +3596,22 @@ class App:
     def _poll_trigger(self):
         """监控运行时，从控制端口读触发源状态（OBS 连接情况等）显示出来。"""
         if self.state == STATE_RUNNING:
+            # 端口和 token 先在主线程取好：work() 跑在后台线程上，
+            # 不该让它去读可能正被主线程改写的 self.cfg。
+            # 顺带修掉硬编码的 8899 —— control.port 是可配的，改了端口之后
+            # 这里原来会一直读不到状态。
+            _ctl = (self.cfg or {}).get("control") or {}
+            _port = int(_ctl.get("port") or 8899)
+            _token = str(_ctl.get("token") or "")
+
             def work():
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-                with opener.open("http://127.0.0.1:8899/status", timeout=4) as resp:
+                req = urllib.request.Request(
+                    "http://127.0.0.1:{}/status".format(_port))
+                if _token:
+                    # /status 现在也要鉴权（它会带出群号、当前游戏、直播间标题）
+                    req.add_header("Authorization", "Bearer " + _token)
+                with opener.open(req, timeout=4) as resp:
                     return json.loads(resp.read().decode("utf-8", "replace"))
 
             def done(res):

@@ -929,7 +929,11 @@ def run_control_auth_tests():
         check("页面准备了 token 输入框", 'id="auth"' in body)
         check("页面的请求带 Authorization 头", "Authorization" in body)
         check("页面里没有明文 token", token not in body)
-        check("/status 免鉴权可访问", call("/status")[0] == 200)
+        # /status 带出群号、当前游戏、直播间标题，和 /trigger 一个级别。
+        # 以前它免鉴权（因为界面轮询是裸请求），现在两边一起改了。
+        check("/status 不带 token 被拒", call("/status")[0] == 403)
+        check("/status 带 token 可访问",
+              call("/status", {"Authorization": "Bearer " + token})[0] == 200)
     except Exception as exc:
         check("控制端口测试整体跑通", False, "{}: {}".format(type(exc).__name__, exc))
     finally:

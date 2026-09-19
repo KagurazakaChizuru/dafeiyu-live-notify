@@ -1749,6 +1749,14 @@ def start_control_server(cfg, on_trigger, get_status):
                     "text/html; charset=utf-8")
 
             if path in ("/status", "/health"):
+                # **也要鉴权。** 它会带出群号、当前在玩什么、直播间标题 ——
+                # 端口虽然只绑 127.0.0.1，但本机任何程序都读得到，和 /trigger
+                # 是同一个级别。以前这里免鉴权，是因为界面轮询走的是裸请求；
+                # 现在界面会带 Authorization 头，两边一起改。
+                # token 为空时 _authorized() 本来就短路放行，默认配置不受影响。
+                if not self._authorized():
+                    return self._send(403, json.dumps(
+                        {"ok": False, "error": "token 不正确"}, ensure_ascii=False))
                 payload = {"ok": True, "app": APP_NAME, "version": VERSION}
                 payload.update(get_status())
                 return self._send(200, json.dumps(payload, ensure_ascii=False, indent=2))
