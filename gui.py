@@ -853,11 +853,12 @@ class RoundedButton(tk.Canvas):
         self.delete("all")
         self._corner_refs = {}          # 必须留引用，PhotoImage 被 GC 就白画了
         self._draw_body(r, x1, y1, x2, y2, self._cur)
-        # **往上挪 1px。** create_text 居中的是"行盒"，而行盒底部留了降部
-        # （g/k/y 那块）的空间 —— 中文用不到，于是字形整体偏下。
-        # 实测：按钮 22..67，文字 37..53，上留白 15 下留白 14。
-        # 几何居中和视觉居中不是一回事。
-        self._label = self.create_text((x1 + x2) // 2, (y1 + y2) // 2 - 1,
+        # 居中就按几何中心，**不要再挪**。
+        #
+        # 我试过往上挪 1px（想着中文字形的墨迹在行盒里偏低），但那是照着
+        # 一张不同尺寸的截图调的：改之前 上15/下14，改之后 上10/下11 ——
+        # 两个方向各差 1px，说明几何居中本来就是对的，是我调反了。
+        self._label = self.create_text((x1 + x2) // 2, (y1 + y2) // 2,
                                        text=self._text, fill=self._text_fill,
                                        font=self._font)
 
@@ -1841,12 +1842,16 @@ class App:
         tk.Frame(box, background=BORDER, height=1).pack(fill="x", pady=18)
 
         # 花体英文。Gabriola 有没有装不影响别的 —— 挑不到就退回界面字体。
-        tk.Label(box, text="I love you three thousand", background=BG,
-                 foreground=ACCENT, font=(pick_script_font(), 17)).pack(
-                     anchor="w", pady=(0, 10))
+        # 破折号在前、「」包住、一点点斜体。
+        tk.Label(box, text="——「I love you three thousand」", background=BG,
+                 foreground=ACCENT,
+                 font=(pick_script_font(), 17, "italic")).pack(
+                     anchor="w", pady=(0, 12))
 
+        tk.Label(box, text="林千鹤", background=BG, foreground=TEXT,
+                 font=(FONT, 10)).pack(anchor="e")
         tk.Label(box, text="KagurazakaChizuru", background=BG,
-                 foreground=MUTED, font=(FONT, 9)).pack(anchor="e")
+                 foreground=MUTED, font=(FONT, 9)).pack(anchor="e", pady=(2, 0))
 
         dlg.update_idletasks()
         # 居中到主窗口，而不是屏幕 —— 它属于那个窗口
