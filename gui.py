@@ -1843,7 +1843,7 @@ class App:
 
         # 花体英文。Gabriola 有没有装不影响别的 —— 挑不到就退回界面字体。
         # 破折号在前、「」包住、一点点斜体。
-        tk.Label(box, text="——「I love you three thousand」", background=BG,
+        tk.Label(box, text="「I love you three thousand」——", background=BG,
                  foreground=ACCENT,
                  font=(pick_script_font(), 17, "italic")).pack(
                      anchor="w", pady=(0, 12))
