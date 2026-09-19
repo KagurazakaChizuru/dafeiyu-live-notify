@@ -19,7 +19,20 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-PORT = 3000
+#: **刻意不写死端口。** 写死会撞上两件事：端口被占、或者落在 Windows 为
+#: Hyper-V 预留的排除区间里 —— 两种都直接 WinError 10013，而且报出来是
+#: 「自检失败」，让人以为是代码坏了。让系统分配一个空闲的就绕开了。
+def _free_port():
+    import socket
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
+
+
+PORT = _free_port()
 
 LOGIN_INFO = {"user_id": 10001, "nickname": "测试机器人"}
 

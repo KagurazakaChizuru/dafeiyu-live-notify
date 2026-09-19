@@ -1302,6 +1302,28 @@ def load_asset(name):
     return path if os.path.isfile(path) else None
 
 
+def ensure_config():
+    """首次运行：没有 config.json 就从 config.example.json 生成一份。
+
+    网盘分享的场景下，用户解压出来是没有 config.json 的 —— 直接报「找不到
+    配置文件」会让人以为包坏了。这里自动生成一份，剩下的交给界面上的
+    「配置安全检查」去告诉他该填什么。
+
+    返回 True 表示这次是新生成的。
+    """
+    if os.path.isfile(CONFIG_PATH):
+        return False
+    example = os.path.join(HERE, "config.example.json")
+    if not os.path.isfile(example):
+        return False
+    try:
+        import shutil
+        shutil.copyfile(example, CONFIG_PATH)
+        return True
+    except OSError:
+        return False
+
+
 def set_window_icon(root):
     """设置标题栏 / 任务栏图标。
 
@@ -3632,6 +3654,12 @@ def main():
         except OSError:
             pass
         return 1
+
+    # 首次运行（网盘分享的场景）：没有 config.json 就先生成一份。
+    # 不这么做的话，用户解压出来直接看到「找不到配置文件」，会以为包坏了。
+    if ensure_config():
+        core.log("首次运行：已从 config.example.json 生成 config.json，"
+                 "请在界面里填好直播间地址和要通知的群。", "WARN")
 
     app = App(root)          # 保持引用：mainloop 阻塞期间它一直存活
 

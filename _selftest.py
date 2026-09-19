@@ -30,7 +30,7 @@ from http.server import ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import live_notify                                    # noqa: E402
-from _mock_napcat import Handler, PORT, GROUPS         # noqa: E402
+from _mock_napcat import Handler, PORT, GROUPS, _free_port  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TEST_CONFIG = os.path.join(HERE, "_test-config.json")
@@ -740,7 +740,7 @@ def run_control_auth_tests():
         if not ok:
             failures.append(name)
 
-    port = 18899
+    port = _free_port()
     token = "test-token-abcdef123456"
     fired = []
     hints = []
@@ -835,7 +835,7 @@ def run_config_safety_tests(path):
     bad_path = os.path.join(here, "_test-badcfg.json")
     raw = _json.load(io.open(path, encoding="utf-8-sig"))
     raw["message"]["link"] = "https://live.bilibili.com/YOUR_ROOM_ID"
-    raw["control"] = {"enabled": True, "port": 18897, "token": ""}
+    raw["control"] = {"enabled": True, "port": _free_port(), "token": ""}
     raw["behavior"]["dry_run"] = True
     raw["trigger"] = dict(raw.get("trigger") or {},
                           on_platform_live=True, room_id=None)
@@ -970,6 +970,62 @@ def run_widget_presence_tests():
     return failures
 
 
+def run_main_wiring_tests():
+    """main() 的接线必须完整：先补配置，再建 App，最后进 mainloop。
+
+    实测踩到过：往 main() 里插代码时，一次赋值把 `app = App(root)` 那行
+    改成了注释，App 从此没被构造过。表现**不是崩溃** —— 窗口停在空的 tk
+    根窗口（标题还是 "tk"、尺寸 216x239），不报错、不弹窗、日志干净、
+    进程活着。只有截图才看得出来。
+
+    第 15 组查"控件有没有建"，这一组查"界面有没有被构造"，两层不同。
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "gui.py")
+    try:
+        src = io.open(path, encoding="utf-8").read()
+    except OSError as exc:
+        check("能读到 gui.py", False, str(exc))
+        return failures
+
+    # 取 main() 的函数体
+    body = None
+    marker = "\ndef main():"
+    if marker in src:
+        tail = src.split(marker, 1)[1]
+        cut = tail.find("\nif __name__")
+        body = tail[:cut] if cut > 0 else tail
+    if body is None:
+        check("找得到 main()", False)
+        return failures
+
+    check("main() 里构造了 App", "app = App(root)" in body)
+    check("main() 里调用了 ensure_config()", "ensure_config()" in body)
+    check("main() 里进了 mainloop", "mainloop()" in body)
+
+    # 顺序也要对：先补配置，再建界面
+    i_cfg = body.find("ensure_config()")
+    i_app = body.find("app = App(root)")
+    i_loop = body.find("mainloop()")
+    check("顺序是 配置 -> App -> mainloop",
+          -1 < i_cfg < i_app < i_loop,
+          "cfg={} app={} loop={}".format(i_cfg, i_app, i_loop))
+
+    # 界面标题必须设过 —— 停在 "tk" 就是没建完
+    check("窗口标题被改过（不是默认的 tk）",
+          "title(" in src and "大肥鱼直播姬" in src)
+
+    return failures
+
+
 def main():
     live_notify._setup_console()          # 先切 UTF-8，否则中文输出会乱码
     path = make_config()
@@ -981,7 +1037,7 @@ def main():
     results = {}
 
     for idx, (title, argv) in enumerate([
-        ("1/15  自检 check", ["check", "--config", path]),
+        ("1/16  自检 check", ["check", "--config", path]),
         ("2/15  彩排 test（不应真的发出去）", ["test", "--config", path]),
         ("3/15  真实发送 send", ["send", "--config", path]),
     ], 1):
@@ -993,64 +1049,69 @@ def main():
     httpd.shutdown()
 
     print("\n" + "#" * 70)
-    print("# 4/15  触发引擎状态机")
+    print("# 4/16  触发引擎状态机")
     print("#" * 70)
     failures = run_engine_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 5/15  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("# 5/16  游戏识别（纯逻辑，不要求有游戏在跑）")
     print("#" * 70)
     failures += run_games_tests()
 
     print("\n" + "#" * 70)
-    print("# 6/15  群发失败重试")
+    print("# 6/16  群发失败重试")
     print("#" * 70)
     failures += run_send_retry_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 7/15  日志落盘前的密钥打码")
+    print("# 7/16  日志落盘前的密钥打码")
     print("#" * 70)
     failures += run_redact_tests()
 
     print("\n" + "#" * 70)
-    print("# 8/15  圆角抗锯齿")
+    print("# 8/16  圆角抗锯齿")
     print("#" * 70)
     failures += run_corner_tests()
 
     print("\n" + "#" * 70)
-    print("# 9/15  启动豁免期（防止鼠标误触）")
+    print("# 9/16  启动豁免期（防止鼠标误触）")
     print("#" * 70)
     failures += run_click_guard_tests()
 
     print("\n" + "#" * 70)
-    print("# 10/15  主题色不许被烤死在默认参数里")
+    print("# 10/16  主题色不许被烤死在默认参数里")
     print("#" * 70)
     failures += run_theme_bake_tests()
 
     print("\n" + "#" * 70)
-    print("# 11/15  模板占位符校验")
+    print("# 11/16  模板占位符校验")
     print("#" * 70)
     failures += run_template_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 12/15  单实例锁")
+    print("# 12/16  单实例锁")
     print("#" * 70)
     failures += run_single_instance_tests()
 
     print("\n" + "#" * 70)
-    print("# 13/15  控制端口认证")
+    print("# 13/16  控制端口认证")
     print("#" * 70)
     failures += run_control_auth_tests()
 
     print("\n" + "#" * 70)
-    print("# 14/15  配置安全检查")
+    print("# 14/16  配置安全检查")
     print("#" * 70)
     failures += run_config_safety_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 15/15  控件引用与创建必须对得上")
+    print("# 15/16  控件引用与创建必须对得上")
     print("#" * 70)
     failures += run_widget_presence_tests()
+
+    print("\n" + "#" * 70)
+    print("# 16/16  main() 的接线必须完整")
+    print("#" * 70)
+    failures += run_main_wiring_tests()
 
     print("\n" + "=" * 70)
     print("命令退出码：check={check}  test={test}  send={send}".format(**results))
