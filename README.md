@@ -2,10 +2,10 @@
 
 ![大肥鱼直播姬](docs/images/banner.png)
 
-[![Release](https://img.shields.io/github/v/release/KagurazakaChizuru/dafeiyu-live-notify?color=2F5FA8&label=release)](https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/latest)
-[![License](https://img.shields.io/github/license/KagurazakaChizuru/dafeiyu-live-notify?color=2F5FA8)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-2F5FA8)](#)
-[![Python](https://img.shields.io/badge/python-3.8%2B-2F5FA8)](#)
+[![Release](https://img.shields.io/github/v/release/KagurazakaChizuru/dafeiyu-live-notify?color=2B8FC7&label=release)](https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/latest)
+[![License](https://img.shields.io/github/license/KagurazakaChizuru/dafeiyu-live-notify?color=2B8FC7)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%2F%2011-2B8FC7)](#)
+[![Python](https://img.shields.io/badge/python-3.8%2B-2B8FC7)](#)
 [![Dependencies](https://img.shields.io/badge/dependencies-0-1E7A4D)](#)
 
 **你开播时，它自动往 QQ 群发一条 `@全体成员`，顺便告诉群友你正在玩什么。**
@@ -22,11 +22,16 @@ Windows 10 / 11 · 免安装 · 不用装 Python · 解压就能跑
 scoop bucket add dafeiyu https://github.com/KagurazakaChizuru/dafeiyu-live-notify
 scoop install dafeiyu/dafeiyu-live-notify
 
-# winget（清单已通过本地校验，正在提交到 winget-pkgs）
-winget install KagurazakaChizuru.DafeiyuLiveNotify
+# winget：清单还在社区审核队列里（PR #437123），**暂时装不到**。
+# 等合并之后才能用下面这条：
+# winget install KagurazakaChizuru.DafeiyuLiveNotify
 ```
 
 ![界面](docs/images/screenshot.png)
+
+界面配色是照着二次元的调子做的：天依蓝、圆角、一点回弹动效。
+**顶部那条头图可以换成你自己的** —— 往 `app\` 里丢一对
+`header-light.png` / `header-dark.png`（780 × 138）就生效，不用重新打包。
 
 ---
 
@@ -48,6 +53,7 @@ winget install KagurazakaChizuru.DafeiyuLiveNotify
 |---|---|
 | 🔔 **开播自动通知** | 多群同时发 `@全体成员`，附一张直播间封面小图 |
 | 🎮 **自动识别在玩什么** | 通知里写「正在玩《三角洲》」。看当前窗口和你自己的直播姬场景配置，**不截图、不上传任何画面** |
+| 📝 **13 套文案自动轮换** | 内置一池子文案，每次开播随机挑一条。群里刷到第三遍就自动忽略 —— 换着发才有人看。想自己写就往里添 |
 | ⏰ **开播后二次提醒** | 30 分 / 1 小时各补一条，给第一波没看到的人第二次机会。有硬性条数上限，刷不爆 |
 | 🌙 **下播提示** | 附本次直播时长和人气峰值。默认不 @ 任何人 |
 | 🎯 **三种触发方式** | 直播间轮询 / OBS 推流事件 / 全局快捷键，可多选，共用冷却 |
