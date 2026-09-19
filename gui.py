@@ -2709,11 +2709,17 @@ class App:
                  font=(FONT, 9)).pack(side="left")
         ttk.Entry(trow2, textvariable=self.var_test_qq, width=16,
                   font=(FONT, 10)).pack(side="left", padx=(8, 8))
-        ttk.Button(trow2, text="私聊发一条给我", width=16,
-                   command=self.send_test_private).pack(side="left")
+        # 开播和下播各一个按钮。原来只有一个"发一条给我"，发的是开播文案 ——
+        # 下播那条只能等真的下播才知道长什么样。
+        ttk.Button(trow2, text="私聊发开播", width=13,
+                   command=lambda: self.send_test_private("live")).pack(side="left")
+        ttk.Button(trow2, text="私聊发下播", width=13,
+                   command=lambda: self.send_test_private("offline")).pack(
+                       side="left", padx=(6, 0))
         card_hint(tcard,
                   "**真的会发出去，但只发到这个 QQ，不进任何群。**\n"
-                  "填你自己的号，别填机器人的号 —— QQ 一般不允许给自己发私聊。",
+                  "填你自己的号，别填机器人的号 —— QQ 一般不允许给自己发私聊。\n"
+                  "下播那条里的时长和峰值是编的，只为看格式。",
                   indent=0, pady=(6, 0))
 
         # ---------------- 保存 ----------------
@@ -3688,8 +3694,12 @@ class App:
         ttk.Button(win, text="关闭", width=10,
                    command=win.destroy).pack(pady=(0, 14))
 
-    def send_test_private(self):
-        """私聊发一条测试。**真的会发，但只发到指定的 QQ，不进群。**"""
+    def send_test_private(self, kind="live"):
+        """私聊发一条测试。**真的会发，但只发到指定的 QQ，不进群。**
+
+        kind 是 "live" 或 "offline"。下播那条要带上时长和峰值 ——
+        它们是编的，只为让模板里那几行有东西可填。
+        """
         target = (self.var_test_qq.get() or "").strip()
         if not target.isdigit():
             messagebox.showwarning(
@@ -3697,7 +3707,18 @@ class App:
                 "别填机器人的号 —— QQ 一般不允许给自己发私聊。")
             return
 
-        text = core.render_text(self.cfg, extra={"game": "测试游戏"})
+        off_cfg = self.cfg.get("offline_message") or {}
+        if kind == "offline":
+            if not off_cfg.get("enabled", True):
+                messagebox.showinfo("下播提示是关着的",
+                                    "配置里关掉了下播提示，发出来也不代表实际会发。")
+            text = core.render_text(
+                self.cfg,
+                template=core.pick_from(off_cfg.get("templates"),
+                                        off_cfg.get("template"), kind="offline"),
+                extra={"game": "测试游戏", "duration": "2 小时 15 分", "peak": 42})
+        else:
+            text = core.render_text(self.cfg, extra={"game": "测试游戏"})
 
         def work():
             ob = core.OneBot(self.cfg["onebot"])

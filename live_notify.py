@@ -2223,14 +2223,32 @@ def _preview_extras(cfg):
 
 
 def cmd_test(cfg):
+    """彩排：把四类消息各渲染一条出来看。**一条都不发。**
+
+    以前只预览了开播那条和二次提醒 —— **下播那条一次都没露过面**，
+    等于只能等真的下播才知道长什么样。这里补齐。
+    """
     log("彩排模式：下面展示将要发送的内容，不会真的发到群里。")
     extra, image = _preview_extras(cfg)
-    send_to_groups(cfg, OneBot(cfg["onebot"]), "彩排（test 命令）",
-                   force_dry=True, extra_fields=extra, image=image)
-    log("提醒文案预览：{}".format(
-        render_text(cfg, template=(cfg.get("reminder") or {}).get("template"),
-                    extra=extra).replace("\n", " / ")))
-    log("内容没问题的话，执行  python live_notify.py send  真正发送一次。")
+
+    # 走跟界面预览同一个函数，两边看到的东西必须一致
+    for name, text in preview_messages(cfg):
+        log("")
+        log("【{}】".format(name))
+        for line in text.split("\n"):
+            log("    " + line)
+
+    # 开播那条还带了封面图，单独说一句
+    if image:
+        log("")
+        log("开播通知还会附一张直播间封面：{}".format(image))
+    else:
+        log("")
+        log("（这次没拿到直播间封面，开播那条就只发文字。）")
+
+    log("")
+    log("内容没问题的话，执行  python live_notify.py send  真正发送一次开播通知。")
+    log("想只发给自己看：界面「消息与设置」里的私聊测试。")
     return 0
 
 
