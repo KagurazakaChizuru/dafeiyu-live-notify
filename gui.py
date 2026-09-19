@@ -54,6 +54,7 @@ if not getattr(sys, "frozen", False) and HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import live_notify as core                                    # noqa: E402
+import tray                     # 右下角托盘图标（纯 ctypes，零依赖）  # noqa: E402
 
 try:
     import games as core_games                                 # noqa: E402
@@ -1566,6 +1567,10 @@ class App:
         self.root.after(3000, self._poll_trigger)
         self.root.after(900, self._maybe_autostart)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        # 托盘延后起：它的回调会碰 self.btn_main / self.state，得等界面就绪。
+        # 也放在 start_click_guard 之前 —— 托盘跟"误触豁免"没关系。
+        self._tray = None
+        self.root.after(300, self._start_tray)
 
         # 豁免期计时**必须在这里起步**，不能放在 __init__ 开头 ——
         # 构建界面本身要花几百毫秒，等窗口真正出现时豁免期早就过去了，等于没装。
@@ -3732,16 +3737,117 @@ class App:
             except Exception as exc:
                 result = exc
             if done is not None:
-                self.root.after(0, lambda: done(result))
+                # 窗口可能已经销毁了（用户点了托盘里的退出，而这个后台活儿
+                # 还在跑）。after 这时候会抛 RuntimeError: main thread is
+                # not in main loop —— 是个噪音，不该让它冒到 stderr。
+                try:
+                    self.root.after(0, lambda: done(result))
+                except (RuntimeError, tk.TclError):
+                    pass
         threading.Thread(target=runner, daemon=True).start()
 
+    def _start_tray(self):
+        """起右下角托盘图标。
+
+        失败也不能影响主程序 —— 没有托盘顶多是回到"必须占着任务栏"的
+        老样子，不该让整个界面起不来。
+        """
+        try:
+            icon = os.path.join(HERE, "app.ico")
+            if not os.path.isfile(icon):
+                icon = os.path.join(HERE, "_build", "app.ico")
+            self._tray = tray.TrayIcon(
+                tooltip="大肥鱼直播姬",
+                icon=icon,
+                on_toggle=self.toggle_window,
+                on_main=self.toggle_main,
+                on_quit=self.quit_app,
+                post=lambda fn: self.root.after(0, fn),
+                state_text=lambda: ("停止监控" if self.state == STATE_RUNNING
+                                    else "开始监控"),
+            )
+            if not self._tray.start():
+                core.log("托盘图标没能创建，程序照常运行。", "WARN")
+                self._tray = None
+        except Exception as exc:
+            core.log("托盘图标起不来：{}".format(exc), "WARN")
+            self._tray = None
+
+    def toggle_window(self):
+        """显示 / 隐藏主界面。托盘的左键点击和菜单第一项都走这儿。"""
+        try:
+            if self.root.state() == "withdrawn":
+                self.show_window()
+            else:
+                self.hide_window()
+        except tk.TclError:
+            pass
+
+    def hide_window(self):
+        """收进托盘。**进程和监控都不动。**"""
+        try:
+            self.root.withdraw()
+            core.log("已收进托盘。右键托盘图标可以退出。")
+        except tk.TclError:
+            pass
+
+    def show_window(self):
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except tk.TclError:
+            pass
+
+    def quit_app(self):
+        """**真正的退出。** 只有托盘菜单那条路会走到这儿。"""
+        if self._tray is not None:
+            self._tray.stop()
+            self._tray = None
+        if self.stop_event:
+            self.stop_event.set()
+        core.log("退出中，正在关闭 NapCat …")
+        try:
+            stop_napcat()
+        except Exception:
+            pass
+        self._teardown_and_destroy()
+
+    def _teardown_and_destroy(self):
+        """退出前的收尾。关窗口和真退出都要走这儿，别抄两份。"""
+        self._pulsing = False
+        for obj in (getattr(self, "_tab_anim", None),
+                    getattr(self, "btn_main", None),
+                    getattr(self, "_last_send_anim", None)):
+            if obj is not None and hasattr(obj, "dispose"):
+                obj.dispose()
+        self._save_geometry()
+        try:
+            core.remove_log_sink(self.log_queue.put)
+        except Exception:
+            pass
+        try:
+            self.root.destroy()
+        except tk.TclError:
+            pass
+
     def on_close(self):
+        """点 X —— **收进托盘，不退出。**
+
+        为什么不让 X 退出：这个程序是挂着才有用的（开着才收得到开播）。
+        点 X 的本意多半是"别占我任务栏"，不是"别监控了"。真要退出，
+        右键托盘图标那条路是明确的，误点不了。
+        """
+        if self._tray is not None:
+            self.hide_window()
+            return
+        # 没有托盘（创建失败）时退回老行为，并说明清楚
         if self.state == STATE_RUNNING or port_open(3000):
             ans = messagebox.askyesnocancel(
                 "还在运行",
-                "监控还在运行。\n\n"
+                "监控还在运行，而且这次没能创建托盘图标。\n\n"
                 "是 —— 全部停止，然后退出\n"
-                "否 —— 只关界面，通知器继续在后台跑\n"
+                "否 —— 只关界面，通知器继续在后台跑（只能去任务管理器结束）\n"
                 "取消 —— 什么都不做")
             if ans is None:
                 return
@@ -3750,17 +3856,7 @@ class App:
                     self.stop_event.set()
                 core.log("退出中，正在关闭 NapCat …")
                 stop_napcat()
-        # 退出前把动画停掉：窗口销毁之后还在排队的回调会报
-        # "main thread is not in main loop"
-        self._pulsing = False
-        for obj in (getattr(self, "_tab_anim", None),
-                    getattr(self, "btn_main", None),
-                    getattr(self, "_last_send_anim", None)):
-            if obj is not None and hasattr(obj, "dispose"):
-                obj.dispose()
-        self._save_geometry()
-        core.remove_log_sink(self.log_queue.put)
-        self.root.destroy()
+        self._teardown_and_destroy()
 
     def _save_geometry(self):
         """把窗口大小和位置记进配置。

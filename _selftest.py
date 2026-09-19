@@ -1023,6 +1023,28 @@ def run_main_wiring_tests():
     check("窗口标题被改过（不是默认的 tk）",
           "title(" in src and "大肥鱼直播姬" in src)
 
+    # ---- 托盘接线 ----
+    #
+    # 实测漏过：加了 _start_tray 却没 import tray、也没初始化 self._tray，
+    # 而当时 122 项自检全过 —— 因为它既不碰 on_close 也不碰托盘。
+    # 这跟当初 app = App(root) 被顶掉是同一类：**引用了，但不存在。**
+    for token, label in (
+        ("import tray", "import tray 在"),
+        ("self._tray = None", "self._tray 初始化过"),
+        ("self._start_tray", "托盘启动被调度过"),
+        ("def quit_app", "有 quit_app（真退出那条路）"),
+        ("def hide_window", "有 hide_window（收进托盘）"),
+        ("def show_window", "有 show_window"),
+    ):
+        check(label, token in src)
+
+    # on_close 必须走托盘那条，不能直接 destroy
+    i_close = src.find("def on_close")
+    if i_close > 0:
+        tail = src[i_close:i_close + 1400]
+        check("on_close 收进托盘而不是直接退出",
+              "hide_window()" in tail and "self.root.destroy()" not in tail)
+
     return failures
 
 
