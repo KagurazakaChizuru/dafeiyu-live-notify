@@ -2503,46 +2503,6 @@ class App:
         self.var_offline_at = tk.BooleanVar()
         self.var_offline_tpl = tk.StringVar()
 
-        off_outer, off = make_card(page, "下播时通知")
-        off_outer.pack(fill="x", pady=(12, 0))
-
-        check(off, self.var_offline,
-              "下播时也发一条（依赖上面的「直播间开播时通知」）")
-        card_hint(off, "占位符 {duration} 本次时长，{peak} 人气峰值，{game} 最后的游戏，"
-                    "{tod} 时段（早上/下午/深夜…）。**别写死「今晚」这类词** —— "
-                    "早上下播就成了笑话，用 {tod} 让程序填。"
-                       "拿不到的就不写这一行。"
-                       "含它的那一整行会自动消失。",
-                  indent=24, pady=(3, 8))
-        # **多行框，跟开播那边对等。** 原来这里是个单行 Entry ——
-        # 连第二条文案都存不下，更别说挑着发。现在能存多条，
-        # 用单独一行 --- 分隔，每次下播随机挑一条。
-        tplrow = tk.Frame(off, background=CARD)
-        tplrow.pack(fill="x", padx=(24, 0))
-        self.txt_offline = tk.Text(tplrow, height=5, wrap="word", font=(FONT, 9),
-                                   background=SUNKEN, foreground=TEXT,
-                                   relief="flat", padx=8, pady=6,
-                                   insertbackground=TEXT, borderwidth=0,
-                                   highlightthickness=1,
-                                   highlightbackground=BORDER,
-                                   highlightcolor=PRIMARY)
-        self.txt_offline.pack(fill="x")
-
-        orow = tk.Frame(off, background=CARD)
-        orow.pack(fill="x", padx=(24, 0), pady=(6, 0))
-        ttk.Button(orow, text="从文案库里挑一条加进来", width=22,
-                   command=lambda: self._append_from_library("offline",
-                                                             self.txt_offline)
-                   ).pack(side="left")
-        tk.Label(orow, text="多条用单独一行 --- 分隔，每次随机挑一条",
-                 background=CARD, foreground=MUTED, font=(FONT, 9)).pack(
-                     side="left", padx=8)
-
-        toggle_row(off, self.var_offline_at,
-                   "@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）",
-                   pady=(11, 0))
-        card_hint(off, "转离线后先等 60 秒复核，期间恢复直播就取消。", pady=(7, 0))
-
     def _build_message_tab(self):
         self.sf_message = ScrollFrame(self.tab_message)
         self.sf_message.pack(fill="both", expand=True)
@@ -2614,6 +2574,49 @@ class App:
                  anchor="w").grid(row=8, column=1, sticky="w", padx=(24, 0))
 
         # ---------------- 游戏识别 ----------------
+        off_outer, off = make_card(page, "下播时通知")
+        off_outer.pack(fill="x", pady=(12, 0))
+
+        # 用 toggle_row 而不是 check —— check 是「触发方式」页里的局部函数，
+        # 这块挪过来之后它不在作用域里（实测 NameError）。
+        toggle_row(off, self.var_offline,
+                   "下播时也发一条（依赖「触发方式」页里的「直播间开播时通知」）",
+                   font=(FONT, 10, "bold"))
+        card_hint(off, "占位符 {duration} 本次时长，{peak} 人气峰值，{game} 最后的游戏，"
+                    "{tod} 时段（早上/下午/深夜…）。**别写死「今晚」这类词** —— "
+                    "早上下播就成了笑话，用 {tod} 让程序填。"
+                       "拿不到的就不写这一行。"
+                       "含它的那一整行会自动消失。",
+                  indent=24, pady=(3, 8))
+        # **多行框，跟开播那边对等。** 原来这里是个单行 Entry ——
+        # 连第二条文案都存不下，更别说挑着发。现在能存多条，
+        # 用单独一行 --- 分隔，每次下播随机挑一条。
+        tplrow = tk.Frame(off, background=CARD)
+        tplrow.pack(fill="x", padx=(24, 0))
+        self.txt_offline = tk.Text(tplrow, height=5, wrap="word", font=(FONT, 9),
+                                   background=SUNKEN, foreground=TEXT,
+                                   relief="flat", padx=8, pady=6,
+                                   insertbackground=TEXT, borderwidth=0,
+                                   highlightthickness=1,
+                                   highlightbackground=BORDER,
+                                   highlightcolor=PRIMARY)
+        self.txt_offline.pack(fill="x")
+
+        orow = tk.Frame(off, background=CARD)
+        orow.pack(fill="x", padx=(24, 0), pady=(6, 0))
+        ttk.Button(orow, text="从文案库里挑一条加进来", width=22,
+                   command=lambda: self._append_from_library("offline",
+                                                             self.txt_offline)
+                   ).pack(side="left")
+        tk.Label(orow, text="多条用单独一行 --- 分隔，每次随机挑一条",
+                 background=CARD, foreground=MUTED, font=(FONT, 9)).pack(
+                     side="left", padx=8)
+
+        toggle_row(off, self.var_offline_at,
+                   "@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）",
+                   pady=(11, 0))
+        card_hint(off, "转离线后先等 60 秒复核，期间恢复直播就取消。", pady=(7, 0))
+
         g_outer, gcard = make_card(page, "游戏识别　在通知里写清楚「正在玩什么」")
         g_outer.pack(fill="x", pady=(12, 0))
 
