@@ -443,6 +443,94 @@ def run_click_guard_tests():
     return failures
 
 
+class NoDialogs(object):
+    """自检期间把模态弹窗全部收起来，改成记账。
+
+    **这是 CI 挂死六小时的真正原因。** 1.7.1 新增的第 15 组会真的建一次
+    界面（gui.App(root)），而它读的是 BASE_DIR/config.json —— 全新克隆里
+    没有这个文件（在 .gitignore 里），于是 gui.py 里那句
+    messagebox.showerror("配置文件有问题", ...) 弹一个模态框等人点确定。
+    本机有人点，CI 上没人点，自检就一直等到作业 6 小时超时。
+
+    模态框还会跑自己的事件循环，顺手把排队的 after 任务挨个执行，于是刷出
+    `invalid command name` / `can't invoke "event" command: application has
+    been destroyed` —— 那些是**症状**，不是病因。
+
+    包成记账之后既不再阻塞，还能反过来断言「建界面不该弹任何东西」。
+    """
+
+    NAMES = ("showinfo", "showwarning", "showerror",
+             "askyesno", "askokcancel", "askyesnocancel")
+
+    def __enter__(self):
+        self.calls = []
+        self._saved = {}
+        try:
+            import tkinter.messagebox as mb
+        except Exception:
+            return self
+        self._mb = mb
+        for name in self.NAMES:
+            fn = getattr(mb, name, None)
+            if fn is None:
+                continue
+            self._saved[name] = fn
+            setattr(mb, name, self._recorder(name))
+        return self
+
+    def _recorder(self, name):
+        def fake(*args, **kwargs):
+            self.calls.append((name, args))
+            # 真被问到也不阻塞：自检没有人在旁边点按钮
+            return True if name.startswith("ask") else "ok"
+        return fake
+
+    def __exit__(self, *_exc):
+        for name, fn in getattr(self, "_saved", {}).items():
+            setattr(self._mb, name, fn)
+        return False
+
+
+def teardown_tk(root):
+    """撤销所有待执行的 after 任务，再销毁根窗口。
+
+    只 destroy() 是不够的：after 注册在**解释器**上，不属于任何控件，
+    控件销毁不会撤销它。等它到点执行时，闭包里那个控件早没了，于是抛
+    `invalid command name "<lambda>"`；紧接着一条排队的 <<ThemeChanged>>
+    撞上已销毁的应用，抛 `can't invoke "event" command`。
+
+    本机撞上只是刷几行报错（退出码仍然是 0），CI 上却会把整个过程**吊死**：
+    1.7.1 起那 13 次运行就是这么挂到 6 小时作业超时的，挂点固定在
+    「# 15/16 控件引用与创建必须对得上」之后。所以这里连同 after 一起收。
+    """
+    try:
+        for aid in root.tk.call("after", "info"):
+            try:
+                # 必须走**裸 Tcl**的 after cancel，不能用 tkinter 的
+                # after_cancel：后者对命令型定时器会顺手 deletecommand，
+                # 而控件自己在 destroy() 里还要再删一次，于是抛
+                # `can't delete Tcl command`，整个自检以退出码 1 收场。
+                root.tk.call("after", "cancel", aid)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    root.destroy()
+    # 还要把「默认根」这个全局引用清掉。Tkinter 只在 _default_root 为假时
+    # 才把它指向新根（Tk.__init__ 里就是 `if not _default_root`），所以上一
+    # 节的根被销毁之后这个引用会一直留着 —— 下一节 tk.Tk() 建出来的根就
+    # **不是**默认根了，而任何没显式传 master 的 ttk 调用（ttk.Style()、
+    # theme_use()）都会打到那具尸体上，Tcl 抛
+    #     can't invoke "event" command: application has been destroyed
+    # 这正是自检日志里最后那条报错的来源。
+    try:
+        import tkinter
+        if tkinter._default_root is root:
+            tkinter._default_root = None
+    except Exception:
+        pass
+
+
 def run_theme_bake_tests():
     """主题色不许被烤死在默认参数里。
 
@@ -518,6 +606,11 @@ def run_theme_bake_tests():
                   got_ts == want_bg, "期望 {} 实际 {}".format(want_bg, got_ts))
             for w in (sf, ts):
                 w.destroy()
+            # 滚轮绑定必须随控件一起撤掉。用 bind_all 的时候这里是漏的：
+            # 换一次主题就多留一条死回调，滚动时撞 `bad window path name`
+            # 弹模态框；CI 上更是把自检直接吊死。
+            check("{}：ScrollFrame 销毁后不留滚轮绑定".format(theme),
+                  not root.tk.call("bind", root._w, "<MouseWheel>"))
             check("{}：SURFACE 与 BG 不同（分层还在）".format(theme),
                   want_surface != want_bg)
         gui.apply_theme("light")
@@ -528,7 +621,7 @@ def run_theme_bake_tests():
         #     Tcl_AsyncDelete: async handler deleted by the wrong thread
         # 整个进程直接挂掉（实测退出码 -2147483645）。所以要显式 del + collect，
         # 而且就在创建它的这个线程里做。
-        root.destroy()
+        teardown_tk(root)
         del root
         gc.collect()
 
@@ -888,7 +981,7 @@ def run_config_safety_tests(path):
     return failures
 
 
-def run_widget_presence_tests():
+def run_widget_presence_tests(path):
     """控件的「引用」与「创建」必须对得上。
 
     实测踩到过：删代码时按起止标记整段切，把三个头部标签的**创建**切掉了，
@@ -944,26 +1037,38 @@ def run_widget_presence_tests():
         check("能否建 Tk 根窗口", False, str(exc))
         return failures
 
+    # 界面读的是 gui.CONFIG_PATH 这个模块级常量（reload_config() 直接用它）。
+    # 不把它指向测试配置的话，全新克隆里根本没有 config.json，界面会弹
+    # 「配置文件有问题」——本机有人点掉，CI 上没人点，于是挂满 6 小时。
+    saved_config = gui.CONFIG_PATH
+    gui.CONFIG_PATH = path
     try:
-        app = gui.App(root)
-        root.update()
-        absent = sorted(a for a in used if not hasattr(app, a))
-        check("界面建好之后，这些控件属性都真的在", not absent,
-              "、".join("self." + a for a in absent[:6]))
+        with NoDialogs() as quiet:
+            app = gui.App(root)
+            root.update()
+            # 配置给全了，就**不该**弹任何东西。1.7.1 新增本组之后 CI 坏就
+            # 坏在这里，这条断言把那件事钉住。
+            check("建界面期间没有弹任何对话框", not quiet.calls,
+                  "、".join(c[0] for c in quiet.calls[:3]))
 
-        # _paint_header 是延迟调度的，单独把它跑一次 —— 它踩过两次坑
-        try:
-            app._paint_header()
-            ok = True
-            detail = ""
-        except Exception as exc:
-            ok = False
-            detail = "{}: {}".format(type(exc).__name__, exc)
-        check("_paint_header 能独立跑通", ok, detail)
+            absent = sorted(a for a in used if not hasattr(app, a))
+            check("界面建好之后，这些控件属性都真的在", not absent,
+                  "、".join("self." + a for a in absent[:6]))
+
+            # _paint_header 是延迟调度的，单独把它跑一次 —— 它踩过两次坑
+            try:
+                app._paint_header()
+                ok = True
+                detail = ""
+            except Exception as exc:
+                ok = False
+                detail = "{}: {}".format(type(exc).__name__, exc)
+            check("_paint_header 能独立跑通", ok, detail)
     except Exception as exc:
         check("界面能否建成", False, "{}: {}".format(type(exc).__name__, exc))
     finally:
-        root.destroy()
+        gui.CONFIG_PATH = saved_config
+        teardown_tk(root)
         del root
         gc.collect()
 
@@ -1128,7 +1233,7 @@ def main():
     print("\n" + "#" * 70)
     print("# 15/16  控件引用与创建必须对得上")
     print("#" * 70)
-    failures += run_widget_presence_tests()
+    failures += run_widget_presence_tests(path)
 
     print("\n" + "#" * 70)
     print("# 16/16  main() 的接线必须完整")

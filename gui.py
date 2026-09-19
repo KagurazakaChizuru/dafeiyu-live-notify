@@ -535,9 +535,26 @@ class ScrollFrame(tk.Frame):
                                               anchor="nw")
         self.body.bind("<Configure>", self._on_body)
         self.canvas.bind("<Configure>", self._on_canvas)
-        # 滚轮用 bind_all + 命中判断，而不是 Enter/Leave：
-        # 指针滑到卡片上时父容器会收到 Leave，那种写法滚一半就断。
-        self.canvas.bind_all("<MouseWheel>", self._on_wheel, add="+")
+        # 滚轮仍然靠命中判断而不是 Enter/Leave（指针滑到卡片上时父容器会收到
+        # Leave，那种写法滚一半就断），但**不再用 bind_all**：
+        # bind_all 挂的是解释器级的 "all" 绑签，控件销毁**不会**解除。换一次
+        # 主题（rebuild_ui）就多留一条死回调，下一次滚动撞 `bad window path
+        # name`，经 on_error 弹一个模态框 —— 实测每重建一次泄漏四条，越积越多。
+        # 绑在顶层窗口上等效（bindtags 会把事件往上传），却能随控件一起解绑。
+        self._top = self.winfo_toplevel()
+        self._wheel_id = self._top.bind("<MouseWheel>", self._on_wheel, add="+")
+
+    def destroy(self):
+        """先解绑滚轮，再销毁。
+
+        bind_all 时代那条死绑定就是这么来的：控件没了，绑签还在。现在绑在
+        顶层窗口上，必须**显式**撤，否则一样会留下悬空回调。
+        """
+        try:
+            self._top.unbind("<MouseWheel>", self._wheel_id)
+        except tk.TclError:
+            pass
+        super().destroy()
 
     def _on_body(self, _event=None):
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
@@ -561,7 +578,12 @@ class ScrollFrame(tk.Frame):
             self.vbar.pack_forget()
 
     def _on_wheel(self, event):
-        if self.body.winfo_reqheight() <= self.canvas.winfo_height():
+        try:
+            if self.body.winfo_reqheight() <= self.canvas.winfo_height():
+                return
+        except tk.TclError:
+            # 控件已销毁。解绑是显式做的，正常不该走到这里 —— 兜一手，
+            # 免得一个滚轮事件把整条 bind 链断掉。
             return
         # 只有指针真的停在本页上才滚，否则切到别的标签页也会跟着动
         node = self.winfo_containing(event.x_root, event.y_root)
@@ -3282,7 +3304,22 @@ class App:
             messagebox.showerror("保存失败", err)
             return
         self.lbl_saved.config(text="✔ 已保存")
-        self.root.after(2500, lambda: self.lbl_saved.config(text=""))
+        self.root.after(2500, self._clear_saved_hint)
+
+    def _clear_saved_hint(self):
+        """几秒后把「已保存 / 已设为 …」那行提示清掉。
+
+        查的是**此刻**的 lbl_saved，而不是注册时闭包抓到的那个：换主题会重建
+        整个界面（rebuild_ui），旧标签那时已经销毁，lambda 一跑就是
+        `invalid command name`，经 on_error 弹一个模态错误框 —— 实测
+        「保存设置后 2.5 秒内切主题」「设完快捷键后 6 秒内切主题」都能撞到。
+        """
+        lbl = getattr(self, "lbl_saved", None)
+        try:
+            if lbl is not None and lbl.winfo_exists():
+                lbl.config(text="")
+        except tk.TclError:
+            pass
 
     # ==================================================================
     #  群管理
@@ -3685,7 +3722,7 @@ class App:
             self.lbl_saved.config(
                 text="✔ 已设为 {}，点「保存」并重新开始监控后生效".format(combo.upper()),
                 foreground=OK_COLOR)
-            self.root.after(6000, lambda: self.lbl_saved.config(text=""))
+            self.root.after(6000, self._clear_saved_hint)
 
         def on_press(ev):
             ks = ev.keysym

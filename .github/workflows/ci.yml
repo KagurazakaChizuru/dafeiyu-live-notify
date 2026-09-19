@@ -10,6 +10,9 @@ jobs:
   check:
     name: 语法 + 自检
     runs-on: windows-latest
+    # 兜底：自检一旦挂住，这里让它 15 分钟就死，而不是耗到默认的 6 小时。
+    # 2026-09-19 那 6 次运行就是挂着不动，一直耗到作业上限才被掐掉。
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +47,10 @@ jobs:
       - name: 语法检查
         run: python -m py_compile live_notify.py triggers.py games.py gui.py
 
+      # 这一条比作业超时更短：真挂住时先红的是它，报出来就是「自检挂死」，
+      # 而不是整个作业超时后一句含糊的「The operation was canceled」。
       - name: 端到端自检（用假 NapCat，不联网）
+        timeout-minutes: 5
         run: python _selftest.py
 
       # 配置文件示例必须能原样加载 —— 它是文档里让人照抄的东西，
