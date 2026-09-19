@@ -66,10 +66,16 @@ Get-ChildItem (Join-Path $App 'napcat') -Force |
     }
 
 # --- sources and assets ----------------------------------------------------
-$skip = @('config.json', 'config.json.bak', '_account.txt', 'gui-error.log',
-          'gui.py.bak', 'header-light.png', 'header-dark.png')
+# 排除备份文件。**尤其是 config.json.bak*** —— 那是用户配置的备份，
+# 里面有他真实的直播间号。上一版就这么泄进包里了。
+$skip = @('config.json', '_account.txt', 'gui-error.log',
+          'header-light.png', 'header-dark.png')
 Get-ChildItem $App -File |
-    Where-Object { $_.Name -notin $skip -and $_.Extension -notin @('.bak', '.log', '.spec') } |
+    Where-Object {
+        $_.Name -notin $skip -and
+        $_.Name -notlike 'config.json*' -and
+        $_.Extension -notin @('.bak', '.log', '.spec')
+    } |
     ForEach-Object { Copy-Item $_.FullName (Join-Path $stage 'app') -Force }
 
 # only what the app actually needs at run time - not the build scripts or spec
@@ -79,6 +85,29 @@ foreach ($f in @('app.ico', 'header-light.png', 'header-dark.png')) {
 }
 if (Test-Path (Join-Path $App 'docs')) {
     Copy-Item (Join-Path $App 'docs') (Join-Path $stage 'app\docs') -Recurse -Force
+}
+
+# --- loadNapCat.js：打包时重写成相对路径 ------------------------------------
+#
+# **不能只改一次就算完。** 那个文件里原本是打包者的绝对路径（含用户名），
+# 既泄露又让收包的人跑不起来。但 NapCat 每次启动都会按当前路径把它重写
+# 回去 —— 所以每次打包都必须重写一遍，靠"上次改过了"是不行的。
+$loadJs = Join-Path $napDst 'loadNapCat.js'
+if (Test-Path $loadJs) {
+    $relative = @'
+// NapCat entry script. Rewritten at package time.
+//
+// The original bakes in an absolute path (with the packager's user name) -
+// that both leaks it and stops working on anyone else's machine.
+// Resolving relative to __dirname runs wherever it is extracted.
+(async () => {
+  const path = require("node:path");
+  const { pathToFileURL } = require("node:url");
+  await import(pathToFileURL(path.join(__dirname, "napcat.mjs")).href);
+})();
+'@
+    [System.IO.File]::WriteAllText($loadJs, $relative, (New-Object System.Text.UTF8Encoding($false)))
+    Write-Host "  loadNapCat.js rewritten to a relative path"
 }
 
 # --- zip -------------------------------------------------------------------
