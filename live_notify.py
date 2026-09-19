@@ -72,7 +72,7 @@ except ImportError:                # 缺文件时通知里就不带游戏名
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.7.2"
+VERSION = "1.7.3"
 
 def _resolve_base_dir():
     """确定**数据目录**（config.json / logs / napcat 所在处）。
@@ -104,6 +104,16 @@ LOG_DIR = os.path.join(BASE_DIR, "logs")
 #    · 风格刻意拉开（直白 / 卖萌 / 中二 / 自嘲 / 简洁），不然挑来挑去一个味
 #    · 留 {link}，那是通知里唯一有用的信息
 TEMPLATE_POOLS = {
+    # ------------------------------------------------------------------
+    #  **池子里不许写死时段。**
+    #
+    #  原来 offline 里写着「今晚播了 {duration}」，live 里写着「深夜档开了」
+    #  「周末到了」—— 早上八点下播就成了笑话，周三凌晨也不会是周末。
+    #  时段的判断做不了「写的时候看一眼」，只能做在**挑文案的那一刻**。
+    #
+    #  所以：基础池只留任何时刻都成立的句子；需要时段的挪进 *_night /
+    #  live_weekend，由 pick_from(kind=...) 按当前时间并入。
+    # ------------------------------------------------------------------
     "live": [
         "🔴 开播了\n{link}",
         "🔴 开播了！\n\n{title}\n正在玩《{game}》\n{link}",
@@ -113,18 +123,31 @@ TEMPLATE_POOLS = {
         "🔴 又到了丢人现眼的时间\n\n{title}\n正在玩《{game}》\n{link}",
         "💗 想你们了，所以我开播了\n\n{title}\n正在玩《{game}》\n{link}",
         "📢 已开播\n\n{title}\n正在玩《{game}》\n{link}",
-        "🌙 深夜档开了\n\n{title}\n正在玩《{game}》\n{link}\n睡不着就来聊两句",
-        "🎉 周末到了，开播！\n\n{title}\n正在玩《{game}》\n{link}",
         "▶ 直播已开始\n{title}\n《{game}》\n{link}",
-        "🐟 上班摸鱼的可以来看了\n\n{title}\n正在玩《{game}》\n{link}",
+        "🐟 摸鱼的可以来看了\n\n{title}\n正在玩《{game}》\n{link}",
+    ],
+    # 只在 23:00 ~ 05:00 并入
+    "live_night": [
+        "🌙 深夜档开了\n\n{title}\n正在玩《{game}》\n{link}\n睡不着就来聊两句",
+        "🌙 这个点还醒着的，来看我\n\n{title}\n正在玩《{game}》\n{link}",
+    ],
+    # 只在周六周日并入
+    "live_weekend": [
+        "🎉 周末了，开播！\n\n{title}\n正在玩《{game}》\n{link}",
+        "🎉 休息日就该这么过\n\n{title}\n正在玩《{game}》\n{link}",
     ],
     "offline": [
-        "🌙 下播了，谢谢陪播\n今晚播了 {duration}",
-        "🌙 下播啦\n\n今晚播了 {duration}\n人气最高 {peak}\n谢谢大家",
+        "🌙 下播了，谢谢陪播\n今天播了 {duration}",
+        "🌙 下播啦\n\n今天播了 {duration}\n人气最高 {peak}\n谢谢大家",
         "🌙 今天就到这\n\n播了 {duration}，峰值 {peak}\n明天见",
         "🥺 播了 {duration}，人还是不多\n谢谢留下来的各位",
         "🌙 战场暂时关闭\n\n本次 {duration}\n最后在玩《{game}》",
+        "💗 谢谢陪我的每一个人\n\n播了 {duration}，峰值 {peak}",
+    ],
+    # 只在 23:00 ~ 05:00 并入
+    "offline_night": [
         "💗 谢谢今晚陪我的每一个人\n\n播了 {duration}，峰值 {peak}\n晚安",
+        "🌙 下播啦，去睡了\n\n今晚播了 {duration}\n大家也早点休息",
     ],
     "reminder": [
         "还在播～\n{link}",
@@ -134,12 +157,28 @@ TEMPLATE_POOLS = {
         "直播仍在继续\n\n{title}\n正在玩《{game}》\n{link}",
         "这个点还开着的应该不多了\n\n正在玩《{game}》\n{link}",
     ],
+    # 换游戏 —— 要说清楚"从什么换成什么"。
+    #
+    # 原来只有「换游戏了，现在打《X》」，看的人不知道之前是什么，也就感觉不到
+    # "换了"。加上 {prev_game} 之后信息才完整。
+    #
+    # {prev_game} 认不出来时是「刚才那个」，**不会是空串** —— 空串会让
+    # 「不玩《》了」很难看；而 DROP_LINE_WHEN_EMPTY 是按整行删的，
+    # 会把整句一起干掉，那就什么都不剩了。
     "change": [
-        "换游戏了，现在打《{game}》",
-        "不玩上一个了，改打《{game}》",
-        "换战场了 —— 《{game}》",
-        "换游戏了，现在打《{game}》\n{link}",
-        "换个口味，《{game}》走起",
+        "🔄 换游戏了\n\n《{prev_game}》 → 《{game}》",
+        "🔄 换战场：《{prev_game}》 → 《{game}》",
+        "🔄 不玩《{prev_game}》了，改打《{game}》",
+        "🎮 换个口味，现在打《{game}》\n（刚才在玩《{prev_game}》）",
+        "🔄 《{prev_game}》打腻了，开《{game}》",
+        "🎯 目标已切换：《{prev_game}》 → 《{game}》\n{link}",
+        # 下面这几条**不含 {prev_game}**。认不出上一个游戏时，上面六条会被
+        # 整条排除；要是这儿也只剩一条，就变成每次都发同一句了 ——
+        # 比不写还单调。两种情况下都要有得挑。
+        "🔄 换游戏了，现在打《{game}》\n{link}",
+        "🎮 续上，现在打《{game}》\n{link}",
+        "🔄 换个战场，现在打《{game}》\n{link}",
+        "🎯 现在打《{game}》\n{link}",
     ],
 }
 
@@ -157,13 +196,74 @@ def _own_first(own, pool):
     return out
 
 
-def pick_from(pool, fallback=""):
+def time_words(now=None):
+    """给模板用的时段词，返回 (tod, weekday)。
+
+    为什么要有这个：写死时段一定出错 —— 早上八点下播写成「今晚」、
+    周三写成「周末」。要么别写时段，要么用占位符让程序填。
+    """
+    now = now or datetime.now()
+    h = now.hour
+    if h < 5:
+        tod = "凌晨"
+    elif h < 9:
+        tod = "早上"
+    elif h < 12:
+        tod = "上午"
+    elif h < 14:
+        tod = "中午"
+    elif h < 18:
+        tod = "下午"
+    elif h < 23:
+        tod = "晚上"
+    else:
+        tod = "深夜"
+    return tod, "星期" + "一二三四五六日"[now.weekday()]
+
+
+def _is_night(now=None):
+    """深夜档的界定：23:00 ~ 05:00。"""
+    now = now or datetime.now()
+    return now.hour >= 23 or now.hour < 5
+
+
+def _time_pools(kind, now=None):
+    """当前时间该额外并入哪些池子。
+
+    **必须在每次挑文案时算，不能在上层加载配置时算。** 配置只读一次，
+    而程序会一直挂着跨过 23 点、跨过周末。
+    """
+    if not kind:
+        return []
+    now = now or datetime.now()
+    names = []
+    if _is_night(now):
+        names.append(kind + "_night")
+    if kind == "live" and now.weekday() >= 5:
+        names.append("live_weekend")
+    return [TEMPLATE_POOLS[x] for x in names if x in TEMPLATE_POOLS]
+
+
+def pick_from(pool, fallback="", kind="", avoid=()):
     """从文案池里随机挑一条。池子空了才退回 fallback。
 
     每次调用都重新挑 —— 所以同一场直播里的开播、二次提醒、下播会各挑各的，
     不会整场都用同一句。
+
+    avoid 里的占位符**没有值**，含它们的模板会被整条排除。
+    实测踩到过：用一个假名字（「刚才那个」）去填 {prev_game}，渲染出
+    「（刚才在玩《刚才那个》）」这种废话。值没有，就别挑需要它的句子。
     """
     pool = [p for p in (pool or []) if p and p.strip()]
+    # 按当前时间并入时段池。「深夜档」「周末」这类句子只在该出现的时候出现。
+    for extra in _time_pools(kind):
+        pool = pool + [p for p in extra if p and p.strip()]
+    # 缺值的占位符 -> 排除含它的模板
+    for token in (avoid or ()):
+        marker = "{" + token + "}"
+        kept = [p for p in pool if marker not in p]
+        if kept:                 # 全被排掉就宁可留着，也不能没得发
+            pool = kept
     if pool:
         return random.choice(pool)
     return fallback
@@ -785,6 +885,15 @@ class OneBot:
     def get_group_member_list(self, group_id):
         return self.call("get_group_member_list", {"group_id": group_id})
 
+    def send_private_msg(self, user_id, message):
+        """私聊发一条。**测试用** —— 想看看消息长什么样又不想打扰群友时走这条。
+
+        注意这是发给「测试接收 QQ」，不是发给机器人自己：QQ 一般不允许
+        给自己发私聊，填机器人自己的号多半会失败。
+        """
+        return self.call("send_private_msg",
+                         {"user_id": int(user_id), "message": message})
+
     def send_group_msg(self, group_id, message):
         return self.call("send_group_msg", {"group_id": group_id, "message": message})
 
@@ -848,6 +957,11 @@ DROP_LINE_WHEN_EMPTY = ("game", "peak")
 #: 看到一个「写着不报错、发出去却是花括号」的占位符。
 ALLOWED_PLACEHOLDERS = frozenset({
     "title", "link", "game", "time", "date", "peak", "duration",
+    # 时段词。**写死时段一定出错**（早上八点下播写成「今晚」），
+    # 想让文案带时间感就用这两个，让程序在发送那一刻填。
+    "tod", "weekday",
+    # 换游戏时的"上一个游戏"。认不出来时是「刚才那个」，不会是空串。
+    "prev_game",
 })
 
 #: 匹配一对花括号里的内容。不要求里面合法 —— 畸形的也要能抓出来。
@@ -967,6 +1081,12 @@ def render_text(cfg, template=None, extra=None):
         "peak": "",
         "duration": "",
     }
+    # 时段词在**这一刻**取，不是配置加载时 —— 程序会挂着跨过深夜。
+    _tod, _wd = time_words()
+    fields["tod"] = _tod
+    fields["weekday"] = _wd
+    # 空串会让「不玩《》了」很难看，给个读得通的兜底
+    fields.setdefault("prev_game", "")
     if extra:
         for key, val in extra.items():
             fields[key] = "" if val is None else str(val)
@@ -989,6 +1109,54 @@ def render_text(cfg, template=None, extra=None):
         for key, val in fields.items():
             text = text.replace("{" + key + "}", val)
         return text.strip() or str(chosen)
+
+
+def preview_messages(cfg, samples=None):
+    """把四类消息各渲染一条，给界面预览。**只渲染，绝不发送。**
+
+    样例值（时长、峰值、游戏名）是编的 —— 预览的意义是看**格式和文案**，
+    不是看真实数据。想看真实数据就开一场播，或者用私聊测试。
+    """
+    s = samples or {}
+    game = s.get("game") or "艾尔登法环"
+    prev = s.get("prev_game") or "只狼"
+    game_cfg = cfg.get("game") or {}
+    off_cfg = cfg.get("offline_message") or {}
+    rem_cfg = cfg.get("reminder") or {}
+
+    items = [("开播通知", render_text(cfg, extra={"game": game}))]
+
+    if off_cfg.get("enabled", True):
+        items.append(("下播提示", render_text(
+            cfg,
+            template=pick_from(off_cfg.get("templates"), off_cfg.get("template"),
+                               kind="offline"),
+            extra={"duration": "2 小时 15 分", "peak": 42, "game": game})))
+
+    if rem_cfg.get("enabled", True):
+        items.append(("二次提醒", render_text(
+            cfg,
+            template=pick_from(rem_cfg.get("templates"), rem_cfg.get("template"),
+                               kind="reminder"),
+            extra={"game": game})))
+
+    if game_cfg.get("enabled", True) and game_cfg.get("announce_change", True):
+        # 两种都列出来：认得出上一个游戏是什么样、认不出又是什么样。
+        # 后者会走 avoid 分支，把提到 {prev_game} 的句子整条排除。
+        items.append(("换游戏（知道上一个）", render_text(
+            cfg,
+            template=pick_from(game_cfg.get("change_templates"),
+                               game_cfg.get("change_template"),
+                               kind="change"),
+            extra={"game": game, "prev_game": prev})))
+        items.append(("换游戏（认不出上一个）", render_text(
+            cfg,
+            template=pick_from(game_cfg.get("change_templates"),
+                               game_cfg.get("change_template"),
+                               kind="change", avoid=("prev_game",)),
+            extra={"game": game, "prev_game": ""})))
+
+    return items
 
 
 def build_message(group, text, image=""):
@@ -1693,14 +1861,23 @@ def cmd_watch(cfg, stop_event=None):
             log("换游戏了（{}），但还在播报冷却期，只记下不发送。".format(name))
             state["game"] = name
             return
-        log("游戏从「{}」变成「{}」，补发一条。".format(state["game"] or "未知", name))
+        # **先把上一个游戏存下来再覆盖。** 原来是先 `state["game"] = name`
+        # 再发送，旧名字当场就没了 —— 文案里想写「从 A 换到 B」也拿不到 A。
+        prev = state["game"] or ""
+        log("游戏从「{}」变成「{}」，补发一条。".format(prev or "未知", name))
         state["game"] = name
         state["last_game_change"] = now
         send_to_groups(cfg, onebot,
-                       "换游戏：{}".format(name),
-                       template=pick_from(game_cfg.get("change_templates"),
-                                          game_cfg.get("change_template")),
-                       extra_fields={"game": name},
+                       "换游戏：{} → {}".format(prev or "未知", name),
+                       template=pick_from(
+                           game_cfg.get("change_templates"),
+                           game_cfg.get("change_template"),
+                           kind="change",
+                           # 认不出上一个游戏时，把提到它的句子整条排除 ——
+                           # 塞个假名字会渲染出「（刚才在玩《刚才那个》）」这种废话
+                           avoid=() if prev else ("prev_game",)),
+                       extra_fields={"game": name,
+                                     "prev_game": prev or ""},
                        at_all=False)
 
     engine = TriggerEngine(cfg, fire) if tg.get("on_process_start") else None
@@ -1736,7 +1913,7 @@ def cmd_watch(cfg, stop_event=None):
             "直播间已下播（时长 {}，人气峰值 {}）".format(
                 duration or "未知", peak or "未知"),
             template=pick_from(offline_cfg.get("templates"),
-                              offline_cfg.get("template")),
+                              offline_cfg.get("template"), kind="offline"),
             extra_fields=extra,
             at_all=bool(offline_cfg.get("at_all", False)))
 

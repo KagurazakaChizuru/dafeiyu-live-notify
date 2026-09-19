@@ -59,6 +59,7 @@
   },
   "behavior": {
     "cooldown_minutes": 30,
+    "test_target": "",
     "send_interval_seconds": 3,
     "dry_run": false,
     "auto_start": false

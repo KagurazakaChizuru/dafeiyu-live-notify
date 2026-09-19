@@ -298,18 +298,18 @@ TEMPLATE_LIBRARY = {
         ("自嘲", "🔴 又到了丢人现眼的时间\n\n{title}\n正在玩《{game}》\n{link}"),
         ("宠粉", "💗 想你们了，所以我开播了\n\n{title}\n正在玩《{game}》\n{link}"),
         ("正经通知", "📢 已开播\n\n{title}\n正在玩《{game}》\n{link}"),
-        ("深夜", "🌙 深夜档开了\n\n{title}\n正在玩《{game}》\n{link}\n睡不着就来聊两句"),
-        ("周末", "🎉 周末到了，开播！\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("时段", "🔴 挑了个{weekday}{tod}开播\n\n{title}\n正在玩《{game}》\n{link}"),
         ("硬核", "▶ 直播已开始\n{title}\n《{game}》\n{link}"),
-        ("摸鱼", "🐟 上班摸鱼的可以来看了\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("摸鱼", "🐟 摸鱼的可以来看了\n\n{title}\n正在玩《{game}》\n{link}"),
+
     ],
     "offline": [
-        ("简短", "🌙 下播了，谢谢陪播\n今晚播了 {duration}"),
-        ("带峰值", "🌙 下播啦\n\n今晚播了 {duration}\n人气最高 {peak}\n谢谢大家"),
+        ("简短", "🌙 下播了，谢谢陪播\n今天播了 {duration}"),
+        ("带峰值", "🌙 下播啦\n\n今天播了 {duration}\n人气最高 {peak}\n谢谢大家"),
         ("预告下次", "🌙 今天就到这\n\n播了 {duration}，峰值 {peak}\n明天见"),
         ("卖惨", "🥺 播了 {duration}，人还是不多\n谢谢留下来的各位"),
         ("中二", "🌙 战场暂时关闭\n\n本次 {duration}\n最后在玩《{game}》"),
-        ("感恩", "💗 谢谢今晚陪我的每一个人\n\n播了 {duration}，峰值 {peak}\n晚安"),
+        ("时段", "💗 谢谢陪我到{tod}\n\n播了 {duration}，峰值 {peak}"),
     ],
     "reminder": [
         ("简短", "还在播～\n{link}"),
@@ -320,11 +320,12 @@ TEMPLATE_LIBRARY = {
         ("深夜", "这个点还开着的应该不多了\n\n正在玩《{game}》\n{link}"),
     ],
     "change": [
-        ("简短", "换游戏了，现在打《{game}》"),
-        ("直白", "不玩上一个了，改打《{game}》"),
-        ("中二", "换战场了 —— 《{game}》"),
-        ("带链接", "换游戏了，现在打《{game}》\n{link}"),
-        ("随性", "换个口味，《{game}》走起"),
+        ("前后对照", "🔄 换游戏了\n\n《{prev_game}》 → 《{game}》"),
+        ("直白", "🔄 不玩《{prev_game}》了，改打《{game}》"),
+        ("中二", "🎯 目标已切换：《{prev_game}》 → 《{game}》\n{link}"),
+        ("随性", "🎮 换个口味，现在打《{game}》\n（刚才在玩《{prev_game}》）"),
+        ("简短", "🔄 换游戏了，现在打《{game}》\n{link}"),
+        ("无上一局", "🎮 续上，现在打《{game}》\n{link}"),
     ],
 }
 
@@ -2339,7 +2340,9 @@ class App:
 
         check(off, self.var_offline,
               "下播时也发一条（依赖上面的「直播间开播时通知」）")
-        card_hint(off, "占位符 {duration} 是本次时长，{peak} 人气峰值，{game} 最后的游戏。"
+        card_hint(off, "占位符 {duration} 本次时长，{peak} 人气峰值，{game} 最后的游戏，"
+                    "{tod} 时段（早上/下午/深夜…）。**别写死「今晚」这类词** —— "
+                    "早上下播就成了笑话，用 {tod} 让程序填。"
                        "拿不到的就不写这一行。"
                        "含它的那一整行会自动消失。",
                   indent=24, pady=(3, 8))
@@ -2411,7 +2414,7 @@ class App:
         self.txt_tpl.bind("<KeyRelease>", lambda e: self._refresh_pool_hint())
 
         tk.Label(grid,
-                 text="占位符：{title} {link} {game} {time} {date}",
+                 text="占位符：{title} {link} {game} {time} {date} {tod} {weekday}",
                  background=CARD, foreground=MUTED, font=(FONT, 8),
                  anchor="w", justify="left", wraplength=560).grid(
             row=5, column=1, sticky="w", pady=(4, 0))
@@ -2493,6 +2496,8 @@ class App:
         self.var_interval = tk.StringVar()
         self.var_confirm = tk.StringVar()
         self.var_cooldown = tk.StringVar()
+        self.var_change_cd = tk.StringVar()
+        self.var_test_qq = tk.StringVar()
         self.var_sendgap = tk.StringVar()
 
         def num_field(c, col, label, var, lo, hi, unit, pad_right=24):
@@ -2508,6 +2513,17 @@ class App:
         num_field(bgrid, 0, "检查间隔", self.var_interval, 1, 3600, "秒", 20)
         num_field(bgrid, 3, "防抖次数", self.var_confirm, 1, 100, "次", 20)
         num_field(bgrid, 6, "冷却时间", self.var_cooldown, 0, 1440, "分钟", 0)
+
+        # 换游戏单独的冷却。原来只在配置里有、界面上没入口 —— 用户想调
+        # 「换游戏太频繁」只能去手改 JSON。
+        tk.Label(bgrid, text="换游戏冷却", background=CARD, foreground=TEXT,
+                 font=(FONT, 9)).grid(row=1, column=3, sticky="w", pady=(12, 0))
+        ttk.Spinbox(bgrid, from_=0, to=1440, textvariable=self.var_change_cd,
+                    width=6).grid(row=1, column=4, pady=(12, 0))
+        tk.Label(bgrid, text="分钟　换游戏后多久内不再播报", background=CARD,
+                 foreground=MUTED, font=(FONT, 9)).grid(row=1, column=5,
+                                                        columnspan=2, sticky="w",
+                                                        padx=(4, 0), pady=(12, 0))
 
         tk.Label(bgrid, text="多群发送间隔", background=CARD, foreground=TEXT,
                  font=(FONT, 9)).grid(row=1, column=0, sticky="w", pady=(12, 0))
@@ -2535,6 +2551,33 @@ class App:
         card_hint(boot, "勾上之后，双击图标就等于直接把监控开起来了——背后会自动拉起 "
                         "NapCat，大约 10 秒后就绪。只想改设置时建议别勾，"
                         "否则每次都白起一遍 NapCat。", indent=24, pady=(4, 0))
+
+        # ---------------- 测试 ----------------
+        #
+        # 为什么要有这块：想看一眼消息长什么样，原来只有两条路 ——
+        # 去点 2-彩排.bat（命令行），或者真发一次让群友当小白鼠。
+        tcard_outer, tcard = make_card(page, "测试")
+        tcard_outer.pack(fill="x", pady=(12, 0))
+
+        trow = tk.Frame(tcard, background=CARD)
+        trow.pack(fill="x", pady=(2, 0))
+        ttk.Button(trow, text="预览将发送的内容", width=20,
+                   command=self.preview_messages).pack(side="left")
+        card_hint(tcard, "只渲染给你看，**一条都不会发出去**。四种消息各来一条。",
+                  indent=0, pady=(6, 0))
+
+        trow2 = tk.Frame(tcard, background=CARD)
+        trow2.pack(fill="x", pady=(12, 0))
+        tk.Label(trow2, text="测试接收 QQ", background=CARD, foreground=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        ttk.Entry(trow2, textvariable=self.var_test_qq, width=16,
+                  font=(FONT, 10)).pack(side="left", padx=(8, 8))
+        ttk.Button(trow2, text="私聊发一条给我", width=16,
+                   command=self.send_test_private).pack(side="left")
+        card_hint(tcard,
+                  "**真的会发出去，但只发到这个 QQ，不进任何群。**\n"
+                  "填你自己的号，别填机器人的号 —— QQ 一般不允许给自己发私聊。",
+                  indent=0, pady=(6, 0))
 
         # ---------------- 保存 ----------------
         save = tk.Frame(page, background=BG)
@@ -2821,6 +2864,9 @@ class App:
         self.var_interval.set(str(int(w["interval_seconds"])))
         self.var_confirm.set(str(int(w["confirm_checks"])))
         self.var_cooldown.set(str(int(b["cooldown_minutes"])))
+        self.var_test_qq.set(str(b.get("test_target") or ""))
+        _gcd = (self.cfg.get("game") or {}).get("change_cooldown_minutes", 5)
+        self.var_change_cd.set(str(int(float(_gcd or 0))))
         self.var_sendgap.set(str(int(b["send_interval_seconds"])))
         self.var_autostart.set(bool(b.get("auto_start", False)))
         self.var_procs.set("，".join(w["processes"]))
@@ -2918,6 +2964,11 @@ class App:
             self.cfg["watch"]["interval_seconds"] = num(self.var_interval, "检查间隔", 1, 3600)
             self.cfg["watch"]["confirm_checks"] = num(self.var_confirm, "防抖次数", 1, 100)
             self.cfg["behavior"]["cooldown_minutes"] = num(self.var_cooldown, "冷却时间", 0, 1440)
+            self.cfg["behavior"]["test_target"] = self.var_test_qq.get().strip()
+            # 换游戏的冷却。**就地改 self.cfg["game"]，不要整个替换** ——
+            # 那个字典里还有用户在别处填的游戏名映射，换掉就丢了。
+            self.cfg.setdefault("game", {})["change_cooldown_minutes"] = num(
+                self.var_change_cd, "换游戏冷却", 0, 1440)
             self.cfg["behavior"]["send_interval_seconds"] = num(self.var_sendgap, "多群发送间隔", 0, 600)
             self.cfg["behavior"]["auto_start"] = bool(self.var_autostart.get())
             raw = self.var_procs.get().replace("，", ",").replace("、", ",")
@@ -2949,7 +3000,7 @@ class App:
             self.cfg["offline_message"] = {
                 "enabled": bool(self.var_offline.get()),
                 "template": (self.var_offline_tpl.get().strip()
-                             or "🌙 下播啦，今晚播了 {duration}"),
+                              or "🌙 下播啦，今天播了 {duration}"),
                 "at_all": bool(self.var_offline_at.get()),
                 "grace_seconds": old_o.get("grace_seconds", 60),
             }
@@ -3457,6 +3508,71 @@ class App:
             else:
                 self.lbl_conn.config(text="● QQ 未就绪（点下面的按钮会自动启动）",
                                      foreground=HEAD_DIM)
+
+        self.run_async(work, done)
+
+    def preview_messages(self):
+        """把四类消息渲染出来给用户看。**绝不发送。**"""
+        try:
+            items = core.preview_messages(self.cfg)
+        except Exception as exc:
+            messagebox.showerror("预览失败", str(exc))
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("将要发送的内容（预览，不会真的发）")
+        win.configure(background=BG)
+        win.geometry("620x560")
+        win.transient(self.root)
+
+        head = tk.Label(win, text="下面这些**只是渲染结果**，一条都没发出去。",
+                        background=BG, foreground=MUTED, font=(FONT, 9),
+                        justify="left", anchor="w", padx=16, pady=12)
+        head.pack(fill="x")
+
+        box = tk.Text(win, wrap="word", background=LOG_BG, foreground=LOG_FG,
+                      relief="flat", padx=16, pady=12, borderwidth=0,
+                      highlightthickness=0, font=(pick_log_font(), 10))
+        box.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        for title, text in items:
+            box.insert("end", "【{}】\n".format(title))
+            box.insert("end", text + "\n\n")
+        box.config(state="disabled")
+
+        ttk.Button(win, text="关闭", width=10,
+                   command=win.destroy).pack(pady=(0, 14))
+
+    def send_test_private(self):
+        """私聊发一条测试。**真的会发，但只发到指定的 QQ，不进群。**"""
+        target = (self.var_test_qq.get() or "").strip()
+        if not target.isdigit():
+            messagebox.showwarning(
+                "要填一个 QQ 号", "「测试接收 QQ」得填数字，比如你自己的 QQ 号。\n\n"
+                "别填机器人的号 —— QQ 一般不允许给自己发私聊。")
+            return
+
+        text = core.render_text(self.cfg, extra={"game": "测试游戏"})
+
+        def work():
+            ob = core.OneBot(self.cfg["onebot"])
+            ok, data = ob.send_private_msg(int(target), text)
+            if not ok:
+                raise RuntimeError(str(data))
+            return text
+
+        def done(result):
+            if isinstance(result, BaseException):
+                messagebox.showerror(
+                    "没发出去",
+                    "发到 {} 失败了：\n\n{}\n\n"
+                    "常见的两个原因：\n"
+                    "  · 填的是机器人自己的号（QQ 不许给自己发）\n"
+                    "  · NapCat 没启动或没登录".format(target, result))
+                return
+            core.log("测试消息已私聊发到 {}。".format(target))
+            messagebox.showinfo("发出去了",
+                                "已经私聊发到 {}，去看看 QQ。\n\n"
+                                "群里没有任何动静。".format(target))
 
         self.run_async(work, done)
 
