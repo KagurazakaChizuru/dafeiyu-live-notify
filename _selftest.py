@@ -148,6 +148,40 @@ def run_engine_tests(path):
           repr(hits))
     check("子串匹配不会误伤 notobs.exe", "notobs.exe" not in hits, repr(hits))
 
+    # ---------- 用例 D：冷却闸门的"放行 + 记账"必须是原子的 ----------
+    #
+    # 原来是先 allow() 再 mark()，两次加锁之间别的触发源也能通过 allow()：
+    # "OBS 开始推流"和"顺手按了快捷键"同时到达时两边都放行，群里收两遍。
+    # 这里用真线程去抢，而不是"看代码觉得应该没问题"。
+    import threading as _th
+    import triggers as _tr
+    gate = _tr.CooldownGate(30)
+    seen = []
+    barrier = _th.Barrier(8)
+
+    def _race():
+        barrier.wait()
+        allowed, _remain = gate.allow(mark=True)
+        seen.append(allowed)
+
+    racers = [_th.Thread(target=_race) for _ in range(8)]
+    for t in racers:
+        t.start()
+    for t in racers:
+        t.join()
+    check("冷却闸门并发时只放行一次", seen.count(True) == 1,
+          "放行了 {} 次".format(seen.count(True)))
+
+    # 静态守卫：调用点不许再退回"先 allow() 再 mark()"的两步写法。
+    # 上面那条并发测试证明的是新 API 本身是原子的；这一条防的是有人把
+    # 调用点改回去 —— 那样测试仍然会过，而线上又会出现双发。
+    _live_src = io.open(live_notify.__file__, encoding="utf-8").read()
+    check("闸门调用点不再拆成 allow() + mark() 两步",
+          "gate.allow(mark=True)" in _live_src
+          and "offline_gate.allow(mark=True)" in _live_src
+          and "gate.mark()" not in _live_src
+          and "offline_gate.mark()" not in _live_src)
+
     return failures
 
 

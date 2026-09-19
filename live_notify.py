@@ -1991,11 +1991,12 @@ def cmd_watch(cfg, stop_event=None):
         看来一模一样。
         """
         if gate is not None:
-            allowed, remain = gate.allow()
+            # mark=True：放行与记账在同一把锁里完成（见 CooldownGate.allow）。
+            # 分成两次调用的话，两个触发源同时到达会双双放行。
+            allowed, remain = gate.allow(mark=True)
             if not allowed:
                 log("触发（{}），但还在冷却期，还剩约 {} 秒，跳过本次。".format(reason, remain), "WARN")
                 return None
-            gate.mark()
         state["last_fire"] = time.time()
         # 开播这件事**确实发生了**，所以状态照记 —— 事件和送达是两回事，
         # 不能因为没发出去就说没开播。
@@ -2114,11 +2115,10 @@ def cmd_watch(cfg, stop_event=None):
             log("下播提示已关闭，跳过。")
             return False
         if offline_gate is not None:
-            allowed, _ = offline_gate.allow()
+            allowed, _ = offline_gate.allow(mark=True)
             if not allowed:
                 log("下播提示还在冷却期，跳过。", "WARN")
                 return False
-            offline_gate.mark()
         state["last_offline"] = time.time()
 
         peak = 0

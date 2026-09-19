@@ -440,8 +440,12 @@ def scan_steam():
     return by_exe, by_path
 
 
+# **注意不要把 rail_apps 列进来。** 它不是噪音，而是真正装游戏的那一层
+# （`WeGameApps\rail_apps\三角洲(2001918)`），scan_wegame 专门有分支处理它。
+# 上一版把它当噪音跳过了，那个分支于是**永远不可达** —— 函数 docstring 里
+# 写的主路径一次都没跑过。
 _WEGAME_NOISE = re.compile(
-    r"^(common_apps|download|downloading|rail_apps|rail_user_data|cache|"
+    r"^(common_apps|download|downloading|rail_user_data|cache|"
     r"wegame|wegameinstaller)$", re.I)
 _WEGAME_ID = re.compile(r"^(.*?)\s*\(\d+\)$")
 

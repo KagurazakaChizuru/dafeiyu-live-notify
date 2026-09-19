@@ -25,7 +25,6 @@ import hashlib
 import json
 import os
 import re
-import re
 import socket
 import struct
 import threading
@@ -64,14 +63,26 @@ class CooldownGate:
         self.last = 0.0
         self._lock = threading.Lock()
 
-    def allow(self):
-        """返回 (是否放行, 剩余秒数)。"""
+    def allow(self, mark=False):
+        """返回 (是否放行, 剩余秒数)。
+
+        **mark=True 时在**同一把锁**里把这次放行记下来。**
+
+        原来的用法是先 allow() 再单独 mark()，两次加锁之间别的触发源也能
+        通过 allow() —— "OBS 开始推流"和"顺手按了快捷键"同时到达时，两边
+        都以为自己是第一个，群里就收两遍。冷却闸门存在的全部意义就是防这
+        一件事，而这条路径恰好漏了。
+        """
         with self._lock:
             if not self.seconds:
+                if mark:
+                    self.last = time.time()
                 return True, 0
             remain = self.seconds - (time.time() - self.last)
             if remain > 0:
                 return False, int(remain)
+            if mark:
+                self.last = time.time()
             return True, 0
 
     def mark(self):
@@ -114,9 +125,26 @@ class WsClient:
                 raise WsClosed("WebSocket 握手时连接被关闭")
             buf += chunk
         head, _, rest = buf.partition(b"\r\n\r\n")
-        status = head.split(b"\r\n", 1)[0].decode("latin1", "replace")
+        lines = head.decode("latin1", "replace").split("\r\n")
+        status = lines[0]
         if " 101 " not in status:
             raise WsClosed("WebSocket 握手失败：{}".format(status))
+        # **校验 Sec-WebSocket-Accept。** 这是握手唯一的完整性检查：不校验的话，
+        # 任何会回一个 101 的东西（代理、别的本地服务、端口被占）都会被当成
+        # OBS 连上，然后一直收不到事件、也不报错。
+        # 技术文档声称这里校验了 —— 实际上以前只看了一眼状态行。
+        want = base64.b64encode(hashlib.sha256(
+            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode("ascii")
+        ).digest()).decode("ascii")
+        got = ""
+        for line in lines[1:]:
+            if line.lower().startswith("sec-websocket-accept:"):
+                got = line.split(":", 1)[1].strip()
+                break
+        if got != want:
+            raise WsClosed(
+                "WebSocket 握手校验失败：Sec-WebSocket-Accept 不匹配"
+                "（拿到 {!r}）".format(got))
         self._buf = bytearray(rest)
 
     def _read_exact(self, n):
@@ -154,8 +182,10 @@ class WsClient:
 
     def recv_text(self):
         """读一条文本消息。超时抛 WsIdle，关闭抛 WsClosed。"""
+        chunks = []
         while True:
             b1, b2 = self._read_exact(2)
+            fin = bool(b1 & 0x80)
             opcode = b1 & 0x0F
             masked = b2 & 0x80
             length = b2 & 0x7F
@@ -175,7 +205,19 @@ class WsClient:
             if opcode == 0xA:                       # pong
                 continue
             if opcode in (0x1, 0x2):
-                return payload.decode("utf-8", "replace")
+                # 分片消息：先收下，等 FIN 那一帧到齐再拼。原来读到第一片就
+                # return，续帧（opcode 0x0）在下一次循环里被当成未知帧丢掉 ——
+                # 消息被截成半截。OBS 的状态消息很短，一般碰不到；但"一般
+                # 碰不到"不是不处理的理由。
+                chunks = [payload]
+                if fin:
+                    return payload.decode("utf-8", "replace")
+                continue
+            if opcode == 0x0 and chunks:            # 续帧
+                chunks.append(payload)
+                if fin:
+                    return b"".join(chunks).decode("utf-8", "replace")
+                continue
 
     def close(self):
         try:
@@ -329,6 +371,12 @@ class ObsWatcher(threading.Thread):
                             self._on_stream(True)
         finally:
             self.connected = False
+            # **断线时把推流状态忘掉。** 留着的话，重连后 OBS 报回来的状态会
+            # 撞上 _on_stream 里那句去重（active == self.streaming 就直接
+            # return）—— "OBS 重启之后再开播"于是永远不触发，而且一声不响。
+            # 重连时如果其实还在推流，会再报一次 active，那一次由外层
+            # CooldownGate 兜住：同一次开播不会发两遍。
+            self.streaming = False
             ws.close()
 
     def _on_stream(self, active):
@@ -409,7 +457,11 @@ class HotkeyListener(threading.Thread):
             return
         mods, vk = parsed
         user32 = ctypes.windll.user32
-        if not user32.RegisterHotKey(None, self.hotkey_id, mods, vk):
+        # 加 MOD_NOREPEAT：不加的话按住不放会连续触发，日志刷屏。
+        # 通知本身有冷却挡着，但"按住快捷键就刷一屏日志"仍然是错的。
+        MOD_NOREPEAT = 0x4000
+        if not user32.RegisterHotKey(None, self.hotkey_id,
+                                     mods | MOD_NOREPEAT, vk):
             msg = ("快捷键 {} 已被其它程序占用，注册失败。"
                    "请到「通知内容与设置」页换一个 —— 实测空闲的有 "
                    "ctrl+alt+k、ctrl+shift+l、alt+f9".format(self.spec.upper()))
