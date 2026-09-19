@@ -114,17 +114,22 @@ TEMPLATE_POOLS = {
     #  所以：基础池只留任何时刻都成立的句子；需要时段的挪进 *_night /
     #  live_weekend，由 pick_from(kind=...) 按当前时间并入。
     # ------------------------------------------------------------------
+    # 开播 —— **{hook} 顶格放**。
+    #
+    # 群消息扫过去只有一秒，第一行决定停不停。所以开场白放最上面，
+    # 标题和游戏名跟在后面当"信息"。{room_title} 是直播间真实标题
+    # （{title} 是配置里那句固定的），有真的就用真的。
     "live": [
+        "🔴 {hook}\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "🔴 {hook}\n\n正在玩《{game}》\n{link}",
+        "🔴 开播了 —— {hook}\n\n{room_title}\n{link}",
+        "🔴 {hook}\n\n{room_title}\n{link}",
+        "🔴 开播了\n\n{hook}\n{room_title}\n正在玩《{game}》\n{link}",
+        "🔴 {hook}\n\n{title}\n正在玩《{game}》\n{link}",
         "🔴 开播了\n{link}",
+        "📢 已开播\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "▶ 直播已开始\n{room_title}\n《{game}》\n{link}",
         "🔴 开播了！\n\n{title}\n正在玩《{game}》\n{link}",
-        "🔴 开播了，就差你了\n\n{title}\n正在玩《{game}》\n{link}",
-        "🥺 播了半小时，房间还是空的\n\n{title}\n{link}\n来个人陪陪我",
-        "⚔️ 战场的门已经开了\n\n{title}\n正在玩《{game}》\n{link}",
-        "🔴 又到了丢人现眼的时间\n\n{title}\n正在玩《{game}》\n{link}",
-        "💗 想你们了，所以我开播了\n\n{title}\n正在玩《{game}》\n{link}",
-        "📢 已开播\n\n{title}\n正在玩《{game}》\n{link}",
-        "▶ 直播已开始\n{title}\n《{game}》\n{link}",
-        "🐟 摸鱼的可以来看了\n\n{title}\n正在玩《{game}》\n{link}",
     ],
     # 只在 23:00 ~ 05:00 并入
     "live_night": [
@@ -181,6 +186,29 @@ TEMPLATE_POOLS = {
         "🎯 现在打《{game}》\n{link}",
     ],
 }
+
+
+#: 群文案（开场白）。跟模板一样，每次发送随机挑一句。
+#:
+#: 为什么单独成池：**这跟模板是两件事**。
+#:   模板   —— 消息整体的骨架，决定有哪几行、什么顺序
+#:   群文案 —— 顶端那句勾人的话，决定扫过去的人愿不愿意停一下
+#: 混在一起写，改一句开场白就得重排整个模板。
+#:
+#: 写这些的规矩：短、口语、像群里的人在说话。**别堆形容词** ——
+#: 「精彩绝伦的直播即将开始」那种一看就是机器人。
+HOOK_POOL = [
+    "刚开，人还不多，来占个前排",
+    "别刷了，来看点会动的",
+    "三分钟，看完不满意再走",
+    "这个点还醒着的，进来坐坐",
+    "开播了，第一波进来的都是元老",
+    "人已经在了，就差你",
+    "摸鱼的可以名正言顺了",
+    "来看看今天能翻几次车",
+    "刚坐下，热乎的",
+    "进来聊两句也行，不一定非得看",
+]
 
 
 def _own_first(own, pool):
@@ -540,6 +568,9 @@ def load_config(path):
         "templates": templates or _own_first(message.get("template"),
                                              TEMPLATE_POOLS["live"]),
         "title": str(message.get("title") or ""),
+        # 群文案池。空的话回落到内置那十条 —— 用户不填也得有得挑。
+        "hooks": [str(x) for x in (message.get("hooks") or []) if str(x).strip()]
+                 or list(HOOK_POOL),
         "link": str(message.get("link") or ""),
         # 开播通知里带一张小封面。B站图床直接给缩好的图，很便宜。
         "cover": bool(message.get("cover", True)),
@@ -962,6 +993,11 @@ ALLOWED_PLACEHOLDERS = frozenset({
     "tod", "weekday",
     # 换游戏时的"上一个游戏"。认不出来时是「刚才那个」，不会是空串。
     "prev_game",
+    # 群文案：从 message.hooks 里随机挑的一句开场白
+    "hook",
+    # B站上**真实的**直播间标题。跟 {title} 不是一回事 ——
+    # {title} 是配置里写死的那句，{room_title} 是你此刻在直播间的标题。
+    "room_title",
 })
 
 #: 匹配一对花括号里的内容。不要求里面合法 —— 畸形的也要能抓出来。
@@ -1085,6 +1121,11 @@ def render_text(cfg, template=None, extra=None):
     _tod, _wd = time_words()
     fields["tod"] = _tod
     fields["weekday"] = _wd
+    # 群文案：每次发送随机挑一句。跟挑模板一个道理 —— 同一个开场白连发
+    # 三遍，群里就自动忽略了。
+    _hooks = [h for h in (cfg["message"].get("hooks") or []) if h and h.strip()]
+    fields["hook"] = random.choice(_hooks) if _hooks else ""
+    fields["room_title"] = ""
     # 空串会让「不玩《》了」很难看，给个读得通的兜底
     fields.setdefault("prev_game", "")
     if extra:

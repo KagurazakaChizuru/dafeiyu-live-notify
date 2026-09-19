@@ -607,6 +607,14 @@ class PlatformWatcher(threading.Thread):
         """当前封面地址（可带缩放参数）。拿不到返回空串。"""
         return BilibiliRoom.cover_url(self.info, width, height)
 
+    def room_title(self):
+        """B站上真实的直播间标题。取不到返回空串。
+
+        解析函数 BilibiliRoom.room_title 一直就有，只是从没被调用过 ——
+        GUI 上那个「今晚直播」是配置里写死的一句，不是这里的。
+        """
+        return BilibiliRoom.room_title(self.info)
+
     def online_now(self):
         return BilibiliRoom.online(self.info)
 

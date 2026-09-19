@@ -290,9 +290,11 @@ STATE_RUNNING = "running"
 #    · 必须留 {link}，那是通知里唯一有用的信息
 TEMPLATE_LIBRARY = {
     "live": [
+        ("群文案 + 真实标题", "🔴 {hook}\n\n{room_title}\n正在玩《{game}》\n{link}"),
+        ("群文案 + 配置标题", "🔴 {hook}\n\n{title}\n正在玩《{game}》\n{link}"),
+        ("群文案顶格", "🔴 开播了 —— {hook}\n\n{room_title}\n{link}"),
         ("直白", "🔴 开播了\n{link}"),
         ("带标题和游戏", "🔴 开播了！\n\n{title}\n正在玩《{game}》\n{link}"),
-        ("催人来", "🔴 开播了，就差你了\n\n{title}\n正在玩《{game}》\n{link}"),
         ("卖惨", "🥺 播了半小时，房间还是空的\n\n{title}\n{link}\n来个人陪陪我"),
         ("中二", "⚔️ 战场的门已经开了\n\n{title}\n正在玩《{game}》\n{link}"),
         ("自嘲", "🔴 又到了丢人现眼的时间\n\n{title}\n正在玩《{game}》\n{link}"),
@@ -2552,6 +2554,25 @@ class App:
                         "NapCat，大约 10 秒后就绪。只想改设置时建议别勾，"
                         "否则每次都白起一遍 NapCat。", indent=24, pady=(4, 0))
 
+        # ---------------- 群文案 ----------------
+        #
+        # 跟「开播文案」分开：那边是消息骨架（有哪几行、什么顺序），
+        # 这边是顶端那句勾人的话。混在一起改一句开场白就得重排整个模板。
+        hk_outer, hk = make_card(page, "群文案（开场白）")
+        hk_outer.pack(fill="x", pady=(12, 0))
+        card_hint(hk, "每次开播从里面**随机挑一句**放在消息最上面，用单独一行 "
+                      "--- 分隔。留空就用内置的十条。\n"
+                      "写在「开播通知文案」里用 {hook} 引用。",
+                  indent=0, pady=(2, 6))
+        self.txt_hooks = tk.Text(hk, height=6, wrap="word", font=(FONT, 10),
+                                 background=SUNKEN, foreground=TEXT,
+                                 relief="flat", padx=10, pady=8,
+                                 insertbackground=TEXT, borderwidth=0,
+                                 highlightthickness=1,
+                                 highlightbackground=BORDER,
+                                 highlightcolor=PRIMARY)
+        self.txt_hooks.pack(fill="x")
+
         # ---------------- 测试 ----------------
         #
         # 为什么要有这块：想看一眼消息长什么样，原来只有两条路 ——
@@ -2865,6 +2886,9 @@ class App:
         self.var_confirm.set(str(int(w["confirm_checks"])))
         self.var_cooldown.set(str(int(b["cooldown_minutes"])))
         self.var_test_qq.set(str(b.get("test_target") or ""))
+        self.txt_hooks.delete("1.0", "end")
+        self.txt_hooks.insert("1.0", "\n---\n".join(
+            self.cfg["message"].get("hooks") or []))
         _gcd = (self.cfg.get("game") or {}).get("change_cooldown_minutes", 5)
         self.var_change_cd.set(str(int(float(_gcd or 0))))
         self.var_sendgap.set(str(int(b["send_interval_seconds"])))
@@ -2965,6 +2989,8 @@ class App:
             self.cfg["watch"]["confirm_checks"] = num(self.var_confirm, "防抖次数", 1, 100)
             self.cfg["behavior"]["cooldown_minutes"] = num(self.var_cooldown, "冷却时间", 0, 1440)
             self.cfg["behavior"]["test_target"] = self.var_test_qq.get().strip()
+            self.cfg["message"]["hooks"] = split_templates(
+                self.txt_hooks.get("1.0", "end-1c"))
             # 换游戏的冷却。**就地改 self.cfg["game"]，不要整个替换** ——
             # 那个字典里还有用户在别处填的游戏名映射，换掉就丢了。
             self.cfg.setdefault("game", {})["change_cooldown_minutes"] = num(

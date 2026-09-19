@@ -25,9 +25,10 @@
     "stop_grace_seconds": 60
   },
   "message": {
-    "template": "🔴 开播了！\n\n{title}\n正在玩《{game}》\n{link}\n\n大家快来捧场～",
+    "template": "🔴 {hook}\n\n{room_title}\n正在玩《{game}》\n{link}",
     "templates": [],
     "title": "今晚直播",
+      "hooks": [],
     "link": "https://live.bilibili.com/YOUR_ROOM_ID",
     "cover": true,
     "cover_size": [200, 112]
