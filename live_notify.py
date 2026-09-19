@@ -120,26 +120,44 @@ TEMPLATE_POOLS = {
     # 标题和游戏名跟在后面当"信息"。{room_title} 是直播间真实标题
     # （{title} 是配置里那句固定的），有真的就用真的。
     "live": [
+        # ---- emoji 放开头，一眼扫过去先看到它。一条里最多两个，多了像广告 ----
         "🔴 {hook}\n\n{room_title}\n{room_desc}\n正在玩《{game}》\n{link}",
-        "🔴 {hook}\n\n{room_title}\n正在玩《{game}》\n{link}",
-        "🔴 开播了 —— {hook}\n\n{room_title}\n{room_desc}\n{link}",
-        "🔴 {hook}\n\n{room_title}\n{link}",
         "🔴 开播了\n\n{hook}\n{room_title}\n{room_desc}\n正在玩《{game}》\n{link}",
-        "🔴 {hook}\n\n{title}\n正在玩《{game}》\n{link}",
+        "🔴 开播了 —— {hook}\n\n{room_title}\n{room_desc}\n{link}",
+        "🔴 {hook}\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "🔴 {hook}\n\n{room_desc}\n正在玩《{game}》\n{link}",
         "🔴 开播了\n{link}",
-        "📢 已开播\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "🔴 开播了！\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "📢 已开播\n\n{room_title}\n{room_desc}\n正在玩《{game}》\n{link}",
+        "📢 开播通知\n\n{room_title}\n正在玩《{game}》\n{link}",
         "▶ 直播已开始\n{room_title}\n《{game}》\n{link}",
-        "🔴 开播了！\n\n{title}\n正在玩《{game}》\n{link}",
+        "🎮 上号了，正在玩《{game}》\n\n{room_title}\n{link}",
+        "🎮 {hook}\n\n正在玩《{game}》\n{link}",
+        "🍿 备好零食，开播了\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "🍿 {hook}\n\n{room_title}\n{room_desc}\n{link}",
+        "🥺 播了半小时，房间还是空的\n\n{room_title}\n{link}\n来个人陪陪我",
+        "🥺 人好少啊，来个活人\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "⚔️ 战场的门已经开了\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "⚔️ {hook}\n\n《{game}》 · {room_title}\n{link}",
+        "🔴 又到了丢人现眼的时间\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "💗 想你们了，所以我开播了\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "✨ {hook}\n\n{room_title}\n{room_desc}\n正在玩《{game}》\n{link}",
+        "🐟 摸鱼的可以来看了\n\n{room_title}\n{room_desc}\n正在玩《{game}》\n{link}",
+        "🔔 你关注的直播间亮了\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "🌊 {hook}\n\n{room_title}\n正在玩《{game}》\n{link}",
     ],
     # 只在 23:00 ~ 05:00 并入
     "live_night": [
-        "🌙 深夜档开了\n\n{title}\n正在玩《{game}》\n{link}\n睡不着就来聊两句",
-        "🌙 这个点还醒着的，来看我\n\n{title}\n正在玩《{game}》\n{link}",
+        "🌙 深夜档开了\n\n{room_title}\n正在玩《{game}》\n{link}\n睡不着就来聊两句",
+        "🌙 这个点还醒着的，来看我\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "🌙 凌晨了，还有人在吗\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "🌙 陪你熬一会儿\n\n{hook}\n{room_title}\n{link}",
     ],
     # 只在周六周日并入
     "live_weekend": [
-        "🎉 周末了，开播！\n\n{title}\n正在玩《{game}》\n{link}",
-        "🎉 休息日就该这么过\n\n{title}\n正在玩《{game}》\n{link}",
+        "🎉 周末了，开播！\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "🎉 休息日就该这么过\n\n{room_title}\n正在玩《{game}》\n{link}",
+        "🎉 周末不睡懒觉，来打游戏\n\n{hook}\n{room_title}\n{link}",
     ],
     "offline": [
         "🌙 下播了，谢谢陪播\n今天播了 {duration}",
@@ -208,6 +226,14 @@ HOOK_POOL = [
     "来看看今天能翻几次车",
     "刚坐下，热乎的",
     "进来聊两句也行，不一定非得看",
+    "🎣 鱼已经上钩了，就差你这条",
+    "🔔 你关注的鸽子开播了",
+    "☕ 泡好茶了，来陪我坐会儿",
+    "👀 在线等，挺急的，等一个观众",
+    "🎬 今天的节目开始了，前排还有座",
+    "🌊 开闸了，来看看今天的水花",
+    "🍜 边吃边播，来看我翻车",
+    "🚀 刚点火，别错过起飞",
 ]
 
 
