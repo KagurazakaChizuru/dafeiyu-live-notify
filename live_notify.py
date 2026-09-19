@@ -41,12 +41,18 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hmac
 import json
 import os
 import random
 import re
 import subprocess
 import sys
+
+try:
+    import msvcrt                  # Windows 专用的文件锁，单实例就靠它
+except ImportError:                # 非 Windows：不做单实例限制，别把人拦在门外
+    msvcrt = None
 import threading
 import time
 import urllib.error
@@ -66,7 +72,7 @@ except ImportError:                # 缺文件时通知里就不带游戏名
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.6.6"
+VERSION = "1.7.0"
 
 def _resolve_base_dir():
     """确定**数据目录**（config.json / logs / napcat 所在处）。
@@ -503,6 +509,16 @@ def load_config(path):
         "grace_seconds": offline_grace,
     }
 
+    # --- 模板占位符校验（不报错，只记下来给 check 看）---
+    # 这里刻意**不抛异常**：一个拼错的占位符不该让整个程序起不来。
+    # 它会在 check 里被明确列出来，同时渲染时会被剔除。
+    cfg_view = {
+        "message": msg_cfg,
+        "offline_message": offline_cfg,
+        "reminder": reminder_cfg,
+        "game": game_cfg,
+    }
+
     # --- behavior / control ---
     behavior = raw.get("behavior") or {}
     if not isinstance(behavior, dict):
@@ -584,6 +600,9 @@ def load_config(path):
         "trigger": trigger_cfg,
         "offline_message": offline_cfg,
         "_path": os.path.abspath(path),
+        # 模板里拼错的占位符。这里查出来给 check 用，**不拦启动** ——
+        # 一个错别字不该让程序起不来，渲染时还会再削一道。
+        "_template_problems": validate_templates(cfg_view),
     }
 
 
@@ -806,6 +825,100 @@ def pick_template(cfg, template=None):
 DROP_LINE_WHEN_EMPTY = ("game", "peak")
 
 
+#: 模板里允许出现的占位符。
+#:
+#: **必须跟 render_text 里 fields 的键保持一致。** 两边一旦对不上，用户就会
+#: 看到一个「写着不报错、发出去却是花括号」的占位符。
+ALLOWED_PLACEHOLDERS = frozenset({
+    "title", "link", "game", "time", "date", "peak", "duration",
+})
+
+#: 匹配一对花括号里的内容。不要求里面合法 —— 畸形的也要能抓出来。
+_BRACE_RE = re.compile(r"\{([^{}]*)\}")
+#: 落单的花括号。_BRACE_RE 要求成对，抓不到它们，得单独来一下。
+_STRAY_BRACE_RE = re.compile(r"[{}]")
+_FIELD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _split_placeholder(body):
+    """把 `{title:>8}` 拆成字段名 title。畸形的返回 None。"""
+    m = _FIELD_RE.match(body)
+    return m.group(0) if m else None
+
+
+def unknown_placeholders(text):
+    """挑出模板里**不认识**的占位符，返回排好序的名字列表。
+
+    为什么要这个：模板里打错一个字母（{titel}），format() 抛 KeyError，
+    被兜底逻辑吞掉，最后把 "{titel}" **原样发进 QQ 群** —— 日志里只有一行
+    WARN，群友已经看见了。这是这个程序唯一会「对外出丑」的失败。
+    """
+    text = str(text or "")
+    bad = set()
+    for m in _BRACE_RE.finditer(text):
+        body = m.group(1)
+        name = _split_placeholder(body)
+        if name is None:
+            bad.add(body.strip() or "(空)")
+        elif name not in ALLOWED_PLACEHOLDERS:
+            bad.add(name)
+    # 成对的都摘掉之后还有花括号残留，说明有落单的
+    if _STRAY_BRACE_RE.search(_BRACE_RE.sub("", text)):
+        bad.add("(括号不成对)")
+    return sorted(bad)
+
+
+def scrub_template(text):
+    """把不认识、写坏了的占位符统统删掉，认识的留着给 format 用。
+
+    **渲染前必须过这一道。** 少一句话群友看不出来，发一串花括号就丢人了。
+    """
+    # **单遍扫描，不能分两步。** 先替换再全文清花括号的话，第二步会把
+    # `{title}` 自己的括号也削掉（实测踩到过，断言当场红）。所以：
+    # 配对区间**之外**的落单花括号才清，区间之内按白名单决定留还是丢。
+    text = str(text or "")
+    out = []
+    pos = 0
+    for m in _BRACE_RE.finditer(text):
+        out.append(_STRAY_BRACE_RE.sub("", text[pos:m.start()]))
+        name = _split_placeholder(m.group(1))
+        if name and name in ALLOWED_PLACEHOLDERS:
+            out.append(m.group(0))          # 认识的，原样留给 format 用
+        pos = m.end()                       # 不认识的整对丢掉
+    out.append(_STRAY_BRACE_RE.sub("", text[pos:]))
+    return "".join(out)
+
+
+#: 配置里每一处能写模板的地方 —— 校验要全覆盖，漏一处就等于没校验。
+TEMPLATE_SLOTS = (
+    ("message", "template", "开播文案"),
+    ("message", "templates", "开播文案"),
+    ("offline_message", "template", "下播文案"),
+    ("offline_message", "templates", "下播文案"),
+    ("reminder", "template", "二次提醒"),
+    ("reminder", "templates", "二次提醒"),
+    ("game", "change_template", "换游戏文案"),
+    ("game", "change_templates", "换游戏文案"),
+)
+
+
+def validate_templates(cfg):
+    """把所有模板扫一遍。返回 [(位置, 错误占位符), ...]，已去重。"""
+    bad = []
+    seen = set()
+    for section, key, label in TEMPLATE_SLOTS:
+        raw = (cfg.get(section) or {}).get(key)
+        items = raw if isinstance(raw, list) else [raw]
+        for text in items:
+            for token in unknown_placeholders(text):
+                mark = (label, token)
+                if mark in seen:
+                    continue
+                seen.add(mark)
+                bad.append(mark)
+    return bad
+
+
 def _drop_empty_lines(template, fields):
     kept = []
     for line in str(template).split("\n"):
@@ -842,18 +955,23 @@ def render_text(cfg, template=None, extra=None):
             fields[key] = "" if val is None else str(val)
 
     chosen = pick_template(cfg, template)
+    # 先削掉不认识的占位符。**必须在下划线处理之前做** —— 否则
+    # "{titel}" 里的 title 会被误判成"有值"，空行判断跟着出错。
+    chosen = scrub_template(chosen)
     tpl = _drop_empty_lines(chosen, fields)
     if not tpl.strip():
         tpl = chosen        # 别把整条消息删成空的了
     try:
         return tpl.format(**fields)
     except (KeyError, IndexError, ValueError):
-        log("消息模板占位符有问题，已按原文发送。可用占位符：{}".format(
-            "、".join("{" + k + "}" for k in fields)), "WARN")
-        text = tpl
+        # 走到这儿说明花括号本身畸形（`{` 或 `{}` 之类），scrub 没拦住。
+        # 再兜一次：把剩下所有花括号段删干净，**绝不原样发出去**。
+        log("模板里有畸形占位符，已剔除。可用占位符：{}".format(
+            "、".join("{" + k + "}" for k in sorted(fields))), "WARN")
+        text = _BRACE_RE.sub("", tpl)
         for key, val in fields.items():
             text = text.replace("{" + key + "}", val)
-        return text
+        return text.strip() or str(chosen)
 
 
 def build_message(group, text, image=""):
@@ -912,9 +1030,76 @@ SEND_RETRY_DELAYS = (5, 15, 45)
 LAST_SEND = {"ok": 0, "total": 0, "failed": [], "when": "", "reason": ""}
 
 
+class SendResult(object):
+    """一次群发的完整结果。
+
+    **为什么要单独一个对象：「触发成功」和「送达成功」是两件事。**
+
+    检测到开播了（事件发生了）不等于群友看到了（消息送达了）。原来
+    send_to_groups 只返回一个成功数字，而 fire() 连这个数字都丢掉了 ——
+    结果「一条都没发出去」和「全部发成功」在调用方看来长得一模一样。
+
+    这个对象把三件事分清楚：
+        total    本该发给几个群
+        ok       真正送达了几个
+        failed   哪些群最终没发出去
+        rounds   补发了几轮才成（0 = 一次就成了）
+        reason   这次发送的缘由
+    """
+
+    __slots__ = ("total", "ok", "failed", "rounds", "reason", "dry")
+
+    def __init__(self, total=0, ok=0, failed=None, rounds=0, reason="", dry=False):
+        self.total = int(total)
+        self.ok = int(ok)
+        self.failed = list(failed or [])
+        self.rounds = int(rounds)
+        self.reason = str(reason or "")
+        self.dry = bool(dry)
+
+    @property
+    def delivered(self):
+        """全部送达。"""
+        return self.total > 0 and self.ok == self.total
+
+    @property
+    def partial(self):
+        """发出去了一部分。"""
+        return 0 < self.ok < self.total
+
+    @property
+    def lost(self):
+        """一条都没送出去 —— 这是最要命的那种，必须让用户看见。"""
+        return self.total > 0 and self.ok == 0
+
+    def summary(self):
+        if self.total == 0:
+            return "没有启用的群，什么都没发"
+        if self.delivered:
+            return "已送达 {}/{}".format(self.ok, self.total)
+        if self.lost:
+            return "一条都没发出去（0/{}）".format(self.total)
+        return "部分送达 {}/{}，失败的群：{}".format(
+            self.ok, self.total, "、".join(str(g) for g in self.failed))
+
+    def __repr__(self):
+        return "<SendResult {}/{} failed={} rounds={}>".format(
+            self.ok, self.total, self.failed, self.rounds)
+
+
+def note_lost(result, what):
+    """一条都没送出去的时候额外喊一声。
+
+    开播那条由 send_to_groups 自己喊；二次提醒、下播、换游戏这几类消息
+    是**过了这村没这店**的，全丢也必须让用户知道，不能只有日志里一行 WARN。
+    """
+    if result is not None and result.lost:
+        log("{}没能送达任何人（{}）。".format(what, result.summary()), "ERROR")
+
+
 def send_to_groups(cfg, onebot, reason, force_dry=False,
                    template=None, extra_fields=None, at_all=None, image=""):
-    """向所有启用的群发送通知。返回成功数。
+    """向所有启用的群发送通知。**返回 SendResult**，不是成功数。
 
     template / extra_fields / at_all / image 用于发送另一类消息
     （下播提示、二次提醒、换游戏播报）：
@@ -928,12 +1113,13 @@ def send_to_groups(cfg, onebot, reason, force_dry=False,
     会连着收到好几条一样的。全都试完还是不行的，记进 LAST_SEND["failed"]。
     """
     dry = cfg["behavior"]["dry_run"] or force_dry
+    rounds_used = 0
     text = render_text(cfg, template=template, extra=extra_fields)
     active = [g for g in cfg["groups"] if g["enabled"]]
     if not active:
         log("没有任何启用的群（enabled 全是 false），什么都没发。", "WARN")
         LAST_SEND.update(ok=0, total=0, failed=[], when="", reason=reason)
-        return 0
+        return SendResult(total=0, ok=0, reason=reason, dry=dry)
 
     log("触发原因：{}".format(reason))
     log("目标：{} 个启用的群（配置里共 {} 个）{}".format(
@@ -956,7 +1142,7 @@ def send_to_groups(cfg, onebot, reason, force_dry=False,
         LAST_SEND.update(ok=len(active), total=len(active), failed=[],
                          when=datetime.now().strftime("%H:%M:%S"),
                          reason=reason)
-        return len(active)
+        return SendResult(total=len(active), ok=len(active), reason=reason, dry=True)
 
     ok_count = 0
     pending = list(active)          # 还没发成功的群
@@ -1002,15 +1188,27 @@ def send_to_groups(cfg, onebot, reason, force_dry=False,
 
         pending = still
         if not pending:
+            rounds_used = attempt
             break
+        rounds_used = attempt
 
+    result = SendResult(total=len(active), ok=ok_count,
+                        failed=[g["group_id"] for g in pending],
+                        rounds=rounds_used, reason=reason)
     LAST_SEND.update(ok=ok_count, total=len(active),
-                     failed=[g["group_id"] for g in pending],
+                     failed=result.failed,
                      when=datetime.now().strftime("%H:%M:%S"),
                      reason=reason)
-    log("完成：成功 {}/{}".format(ok_count, len(active)),
-        "WARN" if pending else "INFO")
-    return ok_count
+    if result.lost:
+        # **一条都没出去。** 这跟"部分失败"不是一回事：群友一个都没看到，
+        # 而开播这件事已经发生了，不会再重来一次。必须显眼。
+        log("完成：{} —— 没有任何群收到通知！".format(result.summary()), "ERROR")
+        log("  开播提示已经错过，不会自动重发。请检查 NapCat 是否在线，"
+            "必要时用「手动推一次」补发。", "ERROR")
+    else:
+        log("完成：{}".format(result.summary()),
+            "WARN" if result.partial else "INFO")
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -1092,7 +1290,32 @@ font-size:12px;overflow:auto;max-height:240px;color:#9aa0a6}}
 <p>开播自动通知正在后台监控中</p>
 <button onclick="fetch('/trigger').then(r=>r.json()).then(d=>document.getElementById('o').textContent=JSON.stringify(d,null,2))">
 立即发送通知</button>
+<div id="auth" style="display:{need_token}">
+<input id="tk" type="password" placeholder="控制端口 token"
+ style="padding:10px;border-radius:8px;border:1px solid #3a3f46;background:#0f1115;color:#e8eaed;width:60%">
+<button onclick="saveToken()" style="margin-top:0;padding:10px 16px;font-size:14px">记住</button>
+</div>
 <pre id="o">点上面的按钮手动触发一次（等同于检测到开播）</pre>
+<script>
+var TOKEN = sessionStorage.getItem('dsh_token') || '';
+function hdr() {{ return TOKEN ? {{'Authorization': 'Bearer ' + TOKEN}} : {{}}; }}
+function saveToken() {{
+  TOKEN = document.getElementById('tk').value.trim();
+  sessionStorage.setItem('dsh_token', TOKEN);
+  document.getElementById('auth').style.display = 'none';
+  fire();
+}}
+function fire() {{
+  fetch('/trigger', {{headers: hdr()}})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(d) {{
+      if (d && d.error && String(d.error).indexOf('token') >= 0) {{
+        document.getElementById('auth').style.display = 'block';
+      }}
+      document.getElementById('o').textContent = JSON.stringify(d, null, 2);
+    }});
+}}
+</script>
 </div></body></html>"""
 
 
@@ -1100,6 +1323,9 @@ def start_control_server(cfg, on_trigger, get_status):
     """在 127.0.0.1 上开一个极简控制端口。仅本机可访问。"""
     port = cfg["control"]["port"]
     token = cfg["control"]["token"]
+
+    # 兼容模式的提示只打一次，别把日志刷屏
+    warned = {"query": False}
 
     class Handler(BaseHTTPRequestHandler):
         server_version = APP_NAME + "/" + VERSION
@@ -1119,22 +1345,52 @@ def start_control_server(cfg, on_trigger, get_status):
                 pass
 
         def _authorized(self):
+            """控制端口鉴权。
+
+            优先认 Authorization 头。URL 里的 token 会进浏览器历史、进各种日志、
+            进 shell 历史 —— 只当**兼容模式**留着，用一次提醒一次。
+
+            一律用 hmac.compare_digest：`==` 是短路比较，早退出的位置会泄露
+            前缀信息。本机端口风险不高，但这条改起来几乎不要钱。
+            """
             if not token:
                 return True
-            if "?" not in self.path:
+
+            supplied, mode = "", ""
+            auth = self.headers.get("Authorization") or ""
+            if auth:
+                supplied = auth[7:].strip() if auth[:7].lower() == "bearer " else auth.strip()
+                mode = "header"
+            if not supplied and "?" in self.path:
+                from urllib.parse import unquote
+                for pair in self.path.split("?", 1)[1].split("&"):
+                    if pair.startswith("token="):
+                        supplied = unquote(pair[6:])
+                        mode = "query"
+                        break
+            if not supplied:
                 return False
-            from urllib.parse import unquote
-            for pair in self.path.split("?", 1)[1].split("&"):
-                if pair.startswith("token=") and unquote(pair[6:]) == token:
-                    return True
-            return False
+            if not hmac.compare_digest(supplied, token):
+                return False
+            if mode == "query" and not warned["query"]:
+                warned["query"] = True
+                # 提示里**不带 token 本身**
+                log("控制端口收到的是带 token 的旧链接。为安全建议改用 "
+                    "Authorization 头，或直接在浏览器里打开 "
+                    "http://127.0.0.1:{}/ 填一次 token。".format(port), "WARN")
+            return True
 
         def do_GET(self):
             path = self.path.split("?", 1)[0].rstrip("/") or "/"
 
             if path == "/":
-                return self._send(200, _CONTROL_PAGE.format(app=DISPLAY_NAME, version=VERSION),
-                                  "text/html; charset=utf-8")
+                # 设了 token 就把输入框露出来 —— 否则那个按钮点下去必然 403。
+                # 输入框只在浏览器里存（sessionStorage），token 不会进 URL、
+                # 不会进历史记录。
+                return self._send(200, _CONTROL_PAGE.format(
+                    app=DISPLAY_NAME, version=VERSION,
+                    need_token="block" if token else "none"),
+                    "text/html; charset=utf-8")
 
             if path in ("/status", "/health"):
                 payload = {"ok": True, "app": APP_NAME, "version": VERSION}
@@ -1162,7 +1418,11 @@ def start_control_server(cfg, on_trigger, get_status):
     threading.Thread(target=httpd.serve_forever, name="control-server", daemon=True).start()
     log("控制端口已开启：http://127.0.0.1:{}/   （浏览器打开可手动触发）".format(port))
     if token:
-        log("已设 token，手动触发地址：http://127.0.0.1:{}/trigger?token={}".format(port, token))
+        # **不要把 token 打进日志。** 原来这里直接 format 了完整 token ——
+        # 日志文件虽然会打码，控制台和任何接走的日志都会看到明文。
+        # 要触发就开 http://127.0.0.1:{port}/ ，页面上填一次就行。
+        log("控制端口已设 token。打开 http://127.0.0.1:{}/ 后填一次即可，"
+            "或改用 Authorization: Bearer 头。".format(port))
     return httpd
 
 
@@ -1170,7 +1430,107 @@ def start_control_server(cfg, on_trigger, get_status):
 # 命令实现
 # --------------------------------------------------------------------------
 
+#: 持有者信息写在这里，**跟锁分开两个文件**。
+#:
+#: 为什么不写进锁文件里：实测过 —— Windows 的 _locking 锁的是**整个文件**，
+#: 不是那一个字节区间。
+#:     [持锁时] 读同一文件 -> PermissionError: [Errno 13]
+#:     [释放后] 读同一文件 -> 正常
+#: 所以「锁加在偏移 4096、信息写在偏移 0」这条设计从根上就不成立，把偏移算准
+#: 也没用。分成两个文件，各干各的。
+LOCK_PATH = os.path.join(LOG_DIR, "app.lock")
+LOCK_INFO_PATH = os.path.join(LOG_DIR, "app.lock.info")
+
+
+class SingleInstance(object):
+    """单实例锁。
+
+    同时在跑两个 watch，两边都会监听、都会发送 —— 群里收到双份通知，而用户
+    完全不知道为什么。这个类就是拦这件事的。
+
+    用 msvcrt.locking 而不是 pid 文件：pid 文件在崩溃或被任务管理器强杀之后
+    会留下来，下次启动就被永久锁死，只能让用户手动删。msvcrt 的锁由**内核**
+    持有，进程一死立刻释放，不会有残留。
+    """
+
+    def __init__(self, path=None):
+        self.path = path or LOCK_PATH
+        self.info_path = self.path + ".info"
+        self._fh = None
+
+    def acquire(self):
+        """拿到锁返回 True；已有实例在跑返回 False。"""
+        if msvcrt is None:              # 非 Windows 不拦
+            return True
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            try:
+                # **不能用 "a+b"**：追加模式下 seek 无效，写永远落在文件末尾。
+                self._fh = open(self.path, "r+b")
+            except OSError:
+                self._fh = open(self.path, "w+b")
+        except OSError as exc:
+            # 打不开锁文件（权限、只读盘）就放行 —— 不能因为锁坏了让程序起不来
+            log("单实例锁文件打不开（{}），本次不做单实例限制。".format(exc), "WARN")
+            return True
+        try:
+            self._fh.seek(0)
+            msvcrt.locking(self._fh.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            self._fh.close()
+            self._fh = None
+            return False
+        # 持有者信息写到**另一个文件**。锁文件一旦被锁，读它就是 PermissionError，
+        # 所以两者不能共用。
+        try:
+            with open(self.info_path, "w", encoding="utf-8") as fh:
+                fh.write("pid={} 启动于 {}\n".format(
+                    os.getpid(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+        except OSError:
+            pass
+        return True
+
+    def holder(self):
+        """读一眼持有者信息（仅用于提示，读失败就算了）。
+
+        读的是 info 文件而不是锁文件 —— 锁文件被锁住之后是读不了的。
+        """
+        try:
+            with open(self.info_path, "r", encoding="utf-8") as fh:
+                return fh.read(200).strip()
+        except OSError:
+            return ""
+
+    def release(self):
+        if self._fh is None:
+            return
+        try:
+            self._fh.seek(0)
+            msvcrt.locking(self._fh.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+        try:
+            self._fh.close()
+        except OSError:
+            pass
+        self._fh = None
+        try:
+            os.remove(self.info_path)      # 走了就把名片收走
+        except OSError:
+            pass
+
+
 def cmd_watch(cfg, stop_event=None):
+    # 单实例锁。GUI 和 CLI 都走这个函数，所以挂在这里两条路径一起覆盖。
+    lock = SingleInstance()
+    if not lock.acquire():
+        who = lock.holder()
+        log("已经有一个直播姬在监控了，这次不重复启动。", "ERROR")
+        if who:
+            log("  正在运行的那个：{}".format(who), "ERROR")
+        log("  同时跑两个会让群里收到双份通知。要换一个，先把上一个停掉。", "ERROR")
+        return 3
+
     onebot = OneBot(cfg["onebot"])
 
     ok, data = onebot.get_login_info()
@@ -1196,6 +1556,10 @@ def cmd_watch(cfg, stop_event=None):
         "reminders_done": set(),    # 已经发过的提醒下标
         "reminders_sent": 0,        # 本场已发条数（含开播那条）
         "last_game_change": 0.0,
+        # 最近一次群发的结果（SendResult）。**和 live_started 分开记** ——
+        # 「开播了」和「通知送到了」是两件事，混在一起就分不出全丢的情况。
+        "last_send": None,
+        "last_send_lost": False,
     }
     obs = None
     hotkey = None
@@ -1241,21 +1605,31 @@ def cmd_watch(cfg, stop_event=None):
 
         多个源（OBS 事件 / 快捷键 / 进程检测）共用一个冷却，
         这样同一次开播不会被发两遍。
+
+        **返回值分两种含义，别再混在一起：**
+            没触发（冷却期）  -> None
+            触发了            -> SendResult，里面写清楚送达了几个群
+        原来一律 return True，于是「一条都没发出去」和「全部发成功」在调用方
+        看来一模一样。
         """
         if gate is not None:
             allowed, remain = gate.allow()
             if not allowed:
                 log("触发（{}），但还在冷却期，还剩约 {} 秒，跳过本次。".format(reason, remain), "WARN")
-                return False
+                return None
             gate.mark()
         state["last_fire"] = time.time()
+        # 开播这件事**确实发生了**，所以状态照记 —— 事件和送达是两回事，
+        # 不能因为没发出去就说没开播。
         mark_live_start()
         name = detect_game()
         state["game"] = name
-        send_to_groups(cfg, onebot, reason,
-                       extra_fields={"game": name},
-                       image=cover_image())
-        return True
+        result = send_to_groups(cfg, onebot, reason,
+                                extra_fields={"game": name},
+                                image=cover_image())
+        state["last_send"] = result
+        state["last_send_lost"] = bool(result.lost)
+        return result
 
     def check_reminders():
         """开播后隔一阵补一条：第一波没看到的人还有机会。"""
@@ -1501,6 +1875,9 @@ def cmd_watch(cfg, stop_event=None):
                 httpd.server_close()
             except Exception:
                 pass
+        # 主动放锁。不写这句其实也行（进程退出内核会释放），但显式放掉能让
+        # 「停止监控之后立刻再点开始」不需要任何等待。
+        lock.release()
     return 0
 
 
@@ -1563,7 +1940,7 @@ def cmd_check(cfg):
     log("NapCat 地址：{}".format(cfg["onebot"]["base_url"]))
 
     # 1. 群配置
-    log("\n[1/4] 群配置")
+    log("\n[1/6] 群配置")
     enabled = [g for g in cfg["groups"] if g["enabled"]]
     for g in cfg["groups"]:
         mode = "@全体成员" if g["at_all"] else (
@@ -1574,7 +1951,7 @@ def cmd_check(cfg):
         problems.append("没有任何启用的群，不会发送任何消息。")
 
     # 2. 进程监控
-    log("\n[2/4] 进程监控")
+    log("\n[2/6] 进程监控")
     try:
         procs = list_processes()
         hits = match_processes(procs, cfg["watch"]["processes"])
@@ -1589,7 +1966,7 @@ def cmd_check(cfg):
         log("  进程枚举失败：{}".format(exc), "ERROR")
 
     # 3. NapCat 连通性
-    log("\n[3/4] NapCat 连通性")
+    log("\n[3/6] NapCat 连通性")
     onebot = OneBot(cfg["onebot"])
     ok, data = onebot.get_login_info()
     self_id = None
@@ -1601,7 +1978,7 @@ def cmd_check(cfg):
         log("  [X] {}".format(data), "ERROR")
 
     # 4. 群权限（决定 @全体成员 能不能生效）
-    log("\n[4/4] 群权限检查（@全体成员 只有群主/管理员才有效）")
+    log("\n[4/6] 群权限检查（@全体成员 只有群主/管理员才有效）")
     if ok:
         gok, glist = onebot.get_group_list()
         if not gok or not isinstance(glist, list):
@@ -1639,6 +2016,74 @@ def cmd_check(cfg):
                     log("  [-] {} {} —— 不使用 @全体成员，跳过检查。".format(g["group_id"], name))
     else:
         log("  跳过（NapCat 没连上）。", "WARN")
+
+    # 5. 模板占位符
+    #
+    # 这条排在这里不是凑数：模板里拼错一个字母，format() 会失败、被兜底吞掉，
+    # 最后把 "{titel}" **原样发进 QQ 群**。群友看得见，日志里却只有一行 WARN。
+    # 这是整个程序唯一会「对外出丑」的失败，所以必须让用户在开播前就看到。
+    log("\n[5/6] 模板占位符")
+    tpl_problems = cfg.get("_template_problems") or []
+    if tpl_problems:
+        for label, token in tpl_problems:
+            problems.append("{}里的 {{{}}} 不是可用占位符，发出去会变成花括号。".format(
+                label, token))
+            log("  [X] {}里的 {{{}}} 不认识".format(label, token), "WARN")
+        log("  可用占位符只有：{}".format(
+            "、".join("{" + k + "}" for k in sorted(ALLOWED_PLACEHOLDERS))))
+        log("  这些花括号在发送前会被剔除，但那句话也就没了 —— 建议改掉。")
+    else:
+        log("  [OK] 所有模板里的占位符都认识。")
+
+    # 6. 配置安全检查
+    #
+    # 专门抓「配置看着没问题、实际会出事」的那些值。最典型的是 message.link
+    # 还留着示例里的 YOUR_ROOM_ID —— 那玩意儿会被原样发进每一个群。
+    #
+    # **这里绝不打印任何密钥的值**，只说有没有问题、怎么改。
+    log("\n[6/6] 配置安全检查")
+    msg_cfg = cfg.get("message") or {}
+    link = str(msg_cfg.get("link") or "").strip()
+    if not link:
+        problems.append("message.link 是空的，通知里会缺一条链接。")
+        log("  [X] message.link 没填", "WARN")
+    elif ("YOUR_ROOM_ID" in link.upper()
+          or "example.com" in link.lower() or "example.org" in link.lower()):
+        problems.append("message.link 还是示例值，发出去群友点不开。")
+        log("  [X] message.link 还是示例值 —— 发出去群友点不开", "WARN")
+        log("      改成你自己的直播间地址，例如 https://live.bilibili.com/123456")
+    else:
+        log("  [OK] message.link 已填。")
+
+    ctrl = cfg.get("control") or {}
+    if ctrl.get("enabled") and not ctrl.get("token"):
+        problems.append("控制端口开着但没设 token，本机任何程序都能触发发送。")
+        log("  [X] 控制端口开着却没设 token", "WARN")
+        log("      本机任何程序都能调 /trigger 让群里收到通知。"
+            "要么设一个 token，要么把 control.enabled 关掉。")
+    elif ctrl.get("enabled") and len(str(ctrl.get("token") or "")) < 16:
+        problems.append("控制端口的 token 太短，容易被猜。")
+        log("  [X] 控制端口 token 太短（少于 16 位）", "WARN")
+    elif ctrl.get("enabled"):
+        log("  [OK] 控制端口已设 token。")
+    else:
+        log("  [-] 控制端口未启用。")
+
+    if (cfg.get("behavior") or {}).get("dry_run"):
+        problems.append("dry_run 开着，程序只会打印、不会真的发出去。")
+        log("  [X] dry_run 开着 —— 你以为在发，其实一条都没发", "WARN")
+
+    tg = cfg.get("trigger") or {}
+    if tg.get("on_platform_live") and not tg.get("room_id"):
+        problems.append("勾了「直播间轮询」但没填房间号，这一路不会生效。")
+        log("  [X] 勾了直播间轮询却没填 room_id", "WARN")
+    elif tg.get("on_platform_live"):
+        log("  [OK] 直播间轮询配好了。")
+
+    if not any(g.get("enabled") for g in cfg["groups"]):
+        log("  [X] 一个启用的群都没有。", "WARN")
+    else:
+        log("  [OK] 群配置没问题。")
 
     # 汇总
     log("\n" + "=" * 62)

@@ -2401,12 +2401,16 @@ class App:
 
             # --- 2. 起监控线程 ---
             def monitor():
+                rc = 0
                 try:
-                    core.cmd_watch(cfg, stop_event)
+                    rc = core.cmd_watch(cfg, stop_event)
                 except Exception:
                     core.log("监控线程异常：\n" + traceback.format_exc(), "ERROR")
+                    rc = -1
                 finally:
-                    self.root.after(0, self._on_monitor_exit)
+                    # 把返回码交回去。cmd_watch 返回 3 = 已经有别的实例在监控，
+                    # 那种情况必须让用户看见，不能假装一切正常。
+                    self.root.after(0, lambda code=rc: self._on_monitor_exit(code))
 
             self.monitor_thread = threading.Thread(target=monitor, daemon=True,
                                                    name="monitor")
@@ -2442,8 +2446,18 @@ class App:
 
         self.run_async(work, done)
 
-    def _on_monitor_exit(self):
-        # 监控线程自己退了（异常或外部停止）
+    def _on_monitor_exit(self, rc=0):
+        """监控线程自己退了（异常、外部停止，或被单实例锁挡住）。"""
+        if rc == 3:
+            # 被锁挡住。这时候**不能**只是静默回到空闲 —— 用户点了开始，
+            # 得让他知道为什么没起来。
+            self._set_state(STATE_IDLE, "（已有实例在跑）")
+            messagebox.showwarning(
+                "没启动",
+                "已经有一个直播姬在监控了，这次没有重复启动。\n\n"
+                "同时跑两个会让群里收到双份通知。要换一个，先把上一个停掉。\n"
+                "（详情见「运行日志」标签页）")
+            return
         if self.state == STATE_RUNNING:
             self._set_state(STATE_IDLE, "（监控已结束）")
 

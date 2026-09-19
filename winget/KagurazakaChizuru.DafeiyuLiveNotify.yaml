@@ -1,5 +1,6 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.7.0.schema.json
 PackageIdentifier: KagurazakaChizuru.DafeiyuLiveNotify
-PackageVersion: 1.6.6
+PackageVersion: 1.7.0
 DefaultLocale: zh-CN
 ManifestType: version
-ManifestVersion: 1.6.6
+ManifestVersion: 1.7.0

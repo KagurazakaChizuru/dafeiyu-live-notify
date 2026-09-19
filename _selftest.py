@@ -17,6 +17,7 @@
 用法：  python _selftest.py
 """
 
+import gc
 import io
 import json
 import os
@@ -276,7 +277,8 @@ def run_send_retry_tests(path):
     try:
         # ---- 用例 A：掉线一轮就恢复 ----
         bot = FakeBot({1: 1, 2: 1})
-        ok = live_notify.send_to_groups(base, bot, "测试")
+        res = live_notify.send_to_groups(base, bot, "测试")
+        ok = res.ok
         check("掉线一轮后重试成功", ok == 2, "ok={}".format(ok))
         check("每个群恰好两次调用（失败 + 补发）",
               sorted(bot.calls) == [1, 1, 2, 2], repr(bot.calls))
@@ -285,7 +287,8 @@ def run_send_retry_tests(path):
 
         # ---- 用例 B：甲群一直失败，乙群一次成功 ----
         bot = FakeBot({1: 99})
-        ok = live_notify.send_to_groups(base, bot, "测试")
+        res = live_notify.send_to_groups(base, bot, "测试")
+        ok = res.ok
         check("部分失败时成功数正确", ok == 1, "ok={}".format(ok))
         check("成功的群**没有**被重发", bot.calls.count(2) == 1, repr(bot.calls))
         check("一直失败的群试满了所有轮次",
@@ -296,11 +299,31 @@ def run_send_retry_tests(path):
         check("LAST_SEND 的总数是启用群数",
               live_notify.LAST_SEND["total"] == 2, repr(live_notify.LAST_SEND))
 
+        # ---- 用例 B2：SendResult 的语义（P0-2）----
+        # 「触发成功」和「送达成功」必须分得开 —— 这几条就是钉这件事的。
+        # 原来 send_to_groups 只返回一个成功数字，而 fire() 连数字都丢了，
+        # 于是「一条都没发出去」和「全部发成功」在调用方看来一模一样。
+        check("SendResult 认出这是部分送达", res.partial is True, repr(res))
+        check("SendResult 没把它当成全丢", res.lost is False, repr(res))
+        check("SendResult 记下了失败群", res.failed == [1], repr(res))
+        check("SendResult 记下了重试轮次",
+              res.rounds == len(live_notify.SEND_RETRY_DELAYS), repr(res))
+
+        # 全军覆没：一个群都没成功
+        all_dead = FakeBot({1: 99, 2: 99})
+        res2 = live_notify.send_to_groups(base, all_dead, "测试")
+        check("全军覆没时 lost 为真", res2.lost is True, repr(res2))
+        check("全军覆没时 delivered 为假", res2.delivered is False, repr(res2))
+        check("全军覆没时 ok 是 0", res2.ok == 0, repr(res2))
+        check("summary 明说「一条都没发出去」",
+              "一条都没发出去" in res2.summary(), res2.summary())
+
         # ---- 用例 C：一个启用的群都没有 ----
         empty = live_notify.load_config(path)
         empty["behavior"]["dry_run"] = False
         empty["groups"] = []
-        ok = live_notify.send_to_groups(empty, FakeBot({}), "测试")
+        res = live_notify.send_to_groups(empty, FakeBot({}), "测试")
+        ok = res.ok
         check("没有启用的群时返回 0 且不炸", ok == 0, "ok={}".format(ok))
     finally:
         live_notify.SEND_RETRY_DELAYS = old_delays
@@ -499,7 +522,368 @@ def run_theme_bake_tests():
                   want_surface != want_bg)
         gui.apply_theme("light")
     finally:
+        # **必须在这里彻底释放，不能留给 GC。**
+        # destroy() 只销毁窗口，不释放 Tcl 解释器；对象要是活到后面某个
+        # 多线程小节才被回收，就会撞上
+        #     Tcl_AsyncDelete: async handler deleted by the wrong thread
+        # 整个进程直接挂掉（实测退出码 -2147483645）。所以要显式 del + collect，
+        # 而且就在创建它的这个线程里做。
         root.destroy()
+        del root
+        gc.collect()
+
+    return failures
+
+
+def run_template_tests(path):
+    """P0-4 模板占位符校验。
+
+    要防的失败长这样：用户模板里拼错一个字母（{titel}），format() 抛 KeyError，
+    被兜底逻辑吞掉，最后把 "{titel}" **原样发进 QQ 群**。群友看见了，日志里
+    只有一行 WARN。这是整个程序唯一会「对外出丑」的失败。
+
+    两道防线各测各的：
+      校验 —— 加载时抓出来，check 里列给用户看
+      清理 —— 渲染时兜底，**花括号绝不能活到消息里**
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    # ---- 校验认得准 ----
+    cases = [
+        ("{link}", []),
+        ("{title} 正在玩《{game}》", []),
+        ("{title:>10} 带格式说明", []),
+        ("{game!r} 带转换", []),
+        ("{titel} 开播了", ["titel"]),
+        ("{Title} 大小写算错", ["Title"]),
+        ("{a} 和 {b}", ["a", "b"]),
+        ("空的 {} 也算错", ["(空)"]),
+        ("没有占位符", []),
+    ]
+    wrong = [(t, live_notify.unknown_placeholders(t), w)
+             for t, w in cases if live_notify.unknown_placeholders(t) != sorted(w)]
+    check("认得准该抓和不该抓的", not wrong,
+          "；".join("{!r}->{}期望{}".format(*x) for x in wrong[:3]))
+
+    # ---- 清理绝不漏花括号 ----
+    leaks = []
+    for text in ("{titel} 开播了", "{} 空的", "{Title} 大小写", "{ 畸形"):
+        out = live_notify.scrub_template(text)
+        if "{" in out or "}" in out:
+            leaks.append("{!r}->{!r}".format(text, out))
+    check("清理后不留花括号", not leaks, "；".join(leaks))
+
+    # ---- 认得的不能被误删 ----
+    kept = live_notify.scrub_template("{title} / {game} / {link}")
+    check("认得的占位符原样留着", kept == "{title} / {game} / {link}", repr(kept))
+
+    # ---- 白名单必须和 render_text 支持的字段一致 ----
+    # 两边一旦对不上，用户会看到「写着不报错、发出去却是花括号」的占位符。
+    try:
+        cfg = live_notify.load_config(path)
+        rendered = live_notify.render_text(cfg, template="{title}|{link}|{game}|{time}|{date}")
+        check("白名单覆盖 render_text 实际支持的字段",
+              "{" not in rendered and "}" not in rendered, repr(rendered))
+    except Exception as exc:
+        check("render_text 用全白名单不炸", False, str(exc))
+
+    # ---- 坏模板不该拦启动，但必须被记录 ----
+    import json
+    base = os.path.dirname(os.path.abspath(__file__))
+    bad_path = os.path.join(base, "_test-badtpl.json")
+    try:
+        raw = json.load(io.open(path, encoding="utf-8-sig"))
+        # 用 setdefault：make_config 只造必填段，offline_message 这些靠
+        # load_config 兜默认值。测试要覆盖「用户配置缺省段」这条路径。
+        raw.setdefault("message", {})["templates"] = ["{titel} 开播了"]
+        raw.setdefault("offline_message", {})["templates"] = ["播了 {duraton}"]
+        io.open(bad_path, "w", encoding="utf-8").write(
+            json.dumps(raw, ensure_ascii=False, indent=2))
+        bad = live_notify.load_config(bad_path)
+        found = dict(bad.get("_template_problems") or [])
+        check("坏模板不拦启动（配置照样加载出来）", bool(bad.get("message")))
+        check("坏模板被记进 _template_problems",
+              found.get("开播文案") == "titel" or ("开播文案", "titel") in (bad.get("_template_problems") or []),
+              repr(bad.get("_template_problems")))
+        check("下播文案的错也抓到了",
+              any(x[0] == "下播文案" for x in (bad.get("_template_problems") or [])),
+              repr(bad.get("_template_problems")))
+
+        # 渲染任意多次都不许出现花括号
+        leaked = []
+        for _ in range(30):
+            out = live_notify.render_text(bad)
+            if "{" in out or "}" in out:
+                leaked.append(out)
+        check("坏模板渲染 30 次都没有花括号漏出去", not leaked,
+              repr(leaked[:2]))
+    finally:
+        try:
+            os.remove(bad_path)
+        except OSError:
+            pass
+
+    return failures
+
+
+def run_single_instance_tests():
+    """P0-1 单实例锁。
+
+    同时跑两个 watch，两边都在监听、都在发送 —— 群里收双份，用户不知道为什么。
+
+    三条要求都要测到，**尤其第三条**：
+        · 第二个实例进不去
+        · 退出后能重开
+        · 异常退出后不能永久锁死 —— 这条只有把子进程强杀才验得出来，
+          也是我选 msvcrt.locking 而不是「写个 pid 文件」的全部理由
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    if live_notify.msvcrt is None:
+        check("非 Windows 平台，跳过单实例检查", True)
+        return failures
+
+    import subprocess as sp
+
+    try:
+        os.remove(live_notify.LOCK_PATH)
+    except OSError:
+        pass
+
+    # ---- 同进程：第二次抢不到 ----
+    a = live_notify.SingleInstance()
+    b = live_notify.SingleInstance()
+    check("第一次抢锁成功", a.acquire() is True)
+    check("第二次抢锁被拦", b.acquire() is False)
+    check("被拦时能读出持有者", "pid=" in (b.holder() or ""), repr(b.holder()))
+    a.release()
+    check("释放后可以重新抢", b.acquire() is True)
+    b.release()
+
+    # ---- 跨进程 + 强杀：这才是「异常退出不锁死」的真正验收 ----
+    here = os.path.dirname(os.path.abspath(__file__))
+    child = os.path.join(here, "_test-lock-child.py")
+    io.open(child, "w", encoding="utf-8").write(
+        "import os, sys, time\n"
+        "sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))\n"
+        "import live_notify as L\n"
+        "s = L.SingleInstance()\n"
+        "print('OK' if s.acquire() else 'BUSY')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(60)\n")
+    try:
+        proc = sp.Popen([sys.executable, child], stdout=sp.PIPE,
+                        stderr=sp.STDOUT, cwd=here)
+        first = proc.stdout.readline().decode("utf-8", "replace").strip()
+        check("子进程抢锁成功", first == "OK", repr(first))
+
+        # 子进程还活着的时候，本进程应该抢不到
+        c = live_notify.SingleInstance()
+        check("子进程持有期间，本进程抢不到", c.acquire() is False)
+
+        # **强杀**，模拟崩溃 / 任务管理器结束进程
+        proc.kill()
+        proc.wait(timeout=30)
+        time.sleep(0.5)
+
+        d = live_notify.SingleInstance()
+        got = d.acquire()
+        check("子进程被强杀后，锁自动释放（不会永久锁死）", got is True)
+        d.release()
+    except Exception as exc:
+        check("子进程强杀后释放锁", False, "{}: {}".format(type(exc).__name__, exc))
+    finally:
+        try:
+            os.remove(child)
+        except OSError:
+            pass
+        try:
+            os.remove(live_notify.LOCK_PATH)
+        except OSError:
+            pass
+        try:
+            os.remove(live_notify.LOCK_INFO_PATH)
+        except OSError:
+            pass
+
+    return failures
+
+
+def run_control_auth_tests():
+    """P0-3 控制端口认证。
+
+    **真的起端口、真的发 HTTP 请求。** 鉴权看代码看不出漏，必须打真请求。
+
+    为什么 URL 里的 token 只算兼容模式：它会进浏览器历史、进各种日志、进
+    shell 历史 —— 一条被复制来复制去的链接就等于把钥匙一起传出去了。
+    """
+    failures = []
+    import time as _time
+    import urllib.error
+    import urllib.request
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    port = 18899
+    token = "test-token-abcdef123456"
+    fired = []
+    hints = []
+
+    orig_log = live_notify.log
+
+    def spy(msg, level="INFO"):
+        if level == "WARN" and "旧链接" in msg:
+            hints.append(msg)
+        orig_log(msg, level)
+
+    live_notify.log = spy
+    srv = None
+    try:
+        srv = live_notify.start_control_server(
+            {"control": {"port": port, "token": token}},
+            lambda: (fired.append(1), {"ok": True})[1],
+            lambda: {"state": "test"})
+        if srv is None:
+            check("控制端口能否启动", False, "端口 {} 起不来".format(port))
+            return failures
+        _time.sleep(0.6)
+        base = "http://127.0.0.1:{}".format(port)
+
+        def call(path, headers=None):
+            req = urllib.request.Request(base + path, headers=headers or {})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    return resp.status, resp.read().decode("utf-8", "replace")
+            except urllib.error.HTTPError as exc:
+                return exc.code, exc.read().decode("utf-8", "replace")
+            except Exception as exc:
+                return 0, str(exc)
+
+        check("不带 token 打 /trigger 被拒", call("/trigger")[0] == 403)
+        check("错误的 token（头）被拒",
+              call("/trigger", {"Authorization": "Bearer wrong-token-zzzzzz"})[0] == 403)
+        check("正确的 token（Authorization 头）放行",
+              call("/trigger", {"Authorization": "Bearer " + token})[0] == 200)
+        check("正确的 token（URL 兼容模式）放行",
+              call("/trigger?token=" + token)[0] == 200)
+        check("错误的 token（URL）被拒",
+              call("/trigger?token=wrong-token-zzzzzz")[0] == 403)
+
+        # 只有两次成功，所以只该触发两次。上一版我把这里写成 3，
+        # 是自己数错了 —— 断言写错比代码写错更隐蔽。
+        check("成功的请求恰好触发两次", len(fired) == 2, "fired={}".format(len(fired)))
+
+        check("用旧链接时给出了提示", len(hints) >= 1)
+        if hints:
+            check("提示里不含 token 明文", token not in hints[0])
+
+        status, body = call("/")
+        check("控制页能打开", status == 200)
+        check("页面准备了 token 输入框", 'id="auth"' in body)
+        check("页面的请求带 Authorization 头", "Authorization" in body)
+        check("页面里没有明文 token", token not in body)
+        check("/status 免鉴权可访问", call("/status")[0] == 200)
+    except Exception as exc:
+        check("控制端口测试整体跑通", False, "{}: {}".format(type(exc).__name__, exc))
+    finally:
+        live_notify.log = orig_log
+        if srv is not None:
+            try:
+                srv.shutdown()
+                srv.server_close()
+            except Exception:
+                pass
+
+    return failures
+
+
+def run_config_safety_tests(path):
+    """P0-5 配置安全检查。
+
+    要抓的是「配置看着没问题、实际会出事」的那些值。最典型的是
+    message.link 还留着示例里的 YOUR_ROOM_ID —— **它会被原样发进每一个群**，
+    而 check 原来一个字都不说。
+
+    做法：把日志抓下来，看看该报的有没有报、不该报的有没有误报。
+    """
+    failures = []
+    import json as _json
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    bad_path = os.path.join(here, "_test-badcfg.json")
+    raw = _json.load(io.open(path, encoding="utf-8-sig"))
+    raw["message"]["link"] = "https://live.bilibili.com/YOUR_ROOM_ID"
+    raw["control"] = {"enabled": True, "port": 18897, "token": ""}
+    raw["behavior"]["dry_run"] = True
+    raw["trigger"] = dict(raw.get("trigger") or {},
+                          on_platform_live=True, room_id=None)
+    io.open(bad_path, "w", encoding="utf-8").write(
+        _json.dumps(raw, ensure_ascii=False, indent=2))
+
+    lines = []
+    orig_log = live_notify.log
+
+    def spy(msg, level="INFO"):
+        lines.append(str(msg))
+        orig_log(msg, level)
+
+    live_notify.log = spy
+    try:
+        live_notify.main(["check", "--config", bad_path])
+    except SystemExit:
+        pass
+    except Exception as exc:
+        check("check 命令跑完不炸", False, "{}: {}".format(type(exc).__name__, exc))
+    finally:
+        live_notify.log = orig_log
+        try:
+            os.remove(bad_path)
+        except OSError:
+            pass
+
+    blob = "\n".join(lines)
+    check("抓到 message.link 还是示例值", "message.link 还是示例值" in blob)
+    check("抓到控制端口没设 token", "控制端口开着却没设 token" in blob)
+    check("抓到 dry_run 开着", "dry_run 开着" in blob)
+    check("抓到勾了轮询没填房间号", "却没填 room_id" in blob)
+    check("有 [6/6] 这一节", "[6/6] 配置安全检查" in blob)
+
+    # 不该误报的：跑一遍正常配置，这几条都不该出现
+    lines2 = []
+    live_notify.log = spy
+    try:
+        live_notify.main(["check", "--config", path])
+    except SystemExit:
+        pass
+    except Exception:
+        pass
+    finally:
+        live_notify.log = orig_log
+    blob2 = "\n".join(
+        x for x in lines2 if "message.link" in x or "dry_run" in x or "room_id" in x)
+    check("正常配置不误报 dry_run", "dry_run 开着" not in blob2, blob2[:100])
 
     return failures
 
@@ -515,9 +899,9 @@ def main():
     results = {}
 
     for idx, (title, argv) in enumerate([
-        ("1/10  自检 check", ["check", "--config", path]),
-        ("2/10  彩排 test（不应真的发出去）", ["test", "--config", path]),
-        ("3/10  真实发送 send", ["send", "--config", path]),
+        ("1/14  自检 check", ["check", "--config", path]),
+        ("2/14  彩排 test（不应真的发出去）", ["test", "--config", path]),
+        ("3/14  真实发送 send", ["send", "--config", path]),
     ], 1):
         print("\n" + "#" * 70)
         print("# " + title)
@@ -527,39 +911,59 @@ def main():
     httpd.shutdown()
 
     print("\n" + "#" * 70)
-    print("# 4/10  触发引擎状态机")
+    print("# 4/14  触发引擎状态机")
     print("#" * 70)
     failures = run_engine_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 5/10  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("# 5/14  游戏识别（纯逻辑，不要求有游戏在跑）")
     print("#" * 70)
     failures += run_games_tests()
 
     print("\n" + "#" * 70)
-    print("# 6/10  群发失败重试")
+    print("# 6/14  群发失败重试")
     print("#" * 70)
     failures += run_send_retry_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 7/10  日志落盘前的密钥打码")
+    print("# 7/14  日志落盘前的密钥打码")
     print("#" * 70)
     failures += run_redact_tests()
 
     print("\n" + "#" * 70)
-    print("# 8/10  圆角抗锯齿")
+    print("# 8/14  圆角抗锯齿")
     print("#" * 70)
     failures += run_corner_tests()
 
     print("\n" + "#" * 70)
-    print("# 9/10  启动豁免期（防止鼠标误触）")
+    print("# 9/14  启动豁免期（防止鼠标误触）")
     print("#" * 70)
     failures += run_click_guard_tests()
 
     print("\n" + "#" * 70)
-    print("# 10/10  主题色不许被烤死在默认参数里")
+    print("# 10/14  主题色不许被烤死在默认参数里")
     print("#" * 70)
     failures += run_theme_bake_tests()
+
+    print("\n" + "#" * 70)
+    print("# 11/14  模板占位符校验")
+    print("#" * 70)
+    failures += run_template_tests(path)
+
+    print("\n" + "#" * 70)
+    print("# 12/14  单实例锁")
+    print("#" * 70)
+    failures += run_single_instance_tests()
+
+    print("\n" + "#" * 70)
+    print("# 13/14  控制端口认证")
+    print("#" * 70)
+    failures += run_control_auth_tests()
+
+    print("\n" + "#" * 70)
+    print("# 14/14  配置安全检查")
+    print("#" * 70)
+    failures += run_config_safety_tests(path)
 
     print("\n" + "=" * 70)
     print("命令退出码：check={check}  test={test}  send={send}".format(**results))
