@@ -33,3 +33,9 @@ gui-error.log
 
 # 提交前隐私自查的模式表 —— 它装的就是不该外传的东西
 _privacy.txt
+
+# 自检跑起来会在这里造临时文件：测试配置、坏配置、锁子进程脚本。
+# 正常收尾会删掉，但**崩溃时会留下** —— 而 git add -A 能把它们卷进
+# 仓库（_selftest-out.txt 就这样进去过一次）。
+_test-*
+_selftest-out.txt

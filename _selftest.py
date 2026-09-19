@@ -33,7 +33,11 @@ import live_notify                                    # noqa: E402
 from _mock_napcat import Handler, PORT, GROUPS, _free_port  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TEST_CONFIG = os.path.join(HERE, "_test-config.json")
+# 文件名带上进程号：**同时跑两份自检时不能共用同一个文件。**
+# 固定名字撞过一次真事：另一份自检收尾时把它删了，正在跑的那份于是在
+# 第 14 组读到 FileNotFoundError，堆栈指向 _json.load，看着像是那一组
+# 写错了 —— 排查花掉的功夫全在这个名字上。
+TEST_CONFIG = os.path.join(HERE, "_test-config-{}.json".format(os.getpid()))
 
 
 def make_config():
