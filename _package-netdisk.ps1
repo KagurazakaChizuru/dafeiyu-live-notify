@@ -27,7 +27,7 @@
 # ===========================================================================
 param(
     [string]$Root = (Split-Path -Parent $PSScriptRoot),
-    [string]$Out  = (Join-Path (Split-Path -Parent $PSScriptRoot) 'dist\dafeiyu-netdisk.zip')
+    [string]$Out  = (Join-Path ([Environment]::GetFolderPath('Desktop')) 'dafeiyu-netdisk.zip')
 )
 
 $ErrorActionPreference = 'Stop'
