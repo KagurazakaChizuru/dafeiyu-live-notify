@@ -873,6 +873,30 @@ def run_bili_tests(path):
               "major": {"draw": {"items": [{"description": "图里的字"}]}}}}}) == "图里的字")
     check("抠不到就返回空串（那一行会被整行删掉）",
           bili._dyn_text({"modules": {}}) == "")
+    # 转发：desc.text 只是「分享视频」，真内容在被转发那张卡片的标题里。
+    # 实测她最新 5 条动态全是这种 —— 照发出去群里就是一句废话。
+    # **照着实测响应写**：转发时自己这层 desc 是「分享视频」、major.type 是
+    # None，被转发内容的标题在 orig 里。第一版测试用的是扁平假结构，
+    # 于是"本地过了、真实数据没变" —— 假结构测不出真问题。
+    check("转发动态用被转发内容的标题（真结构：内容在 orig 里）",
+          bili._dyn_text({
+              "type": "DYNAMIC_TYPE_FORWARD",
+              "modules": {"module_dynamic": {
+                  "desc": {"text": "分享视频"},
+                  "major": {"type": None}}},
+              "orig": {"type": "DYNAMIC_TYPE_AV",
+                       "modules": {"module_dynamic": {
+                           "major": {"type": "MAJOR_TYPE_ARCHIVE",
+                                     "archive": {"title": "被转发的视频标题"}}}}}})
+          == "被转发的视频标题")
+    check("纯文字动态不受影响",
+          bili._dyn_text({"type": "DYNAMIC_TYPE_WORD",
+                          "modules": {"module_dynamic": {
+                              "desc": {"text": "今天做了个决定"}}}})
+          == "今天做了个决定")
+    check("只有通用标签、没有卡片标题时，标签原文也得留着",
+          bili._dyn_text({"modules": {"module_dynamic": {
+              "desc": {"text": "分享视频"}}}}) == "分享视频")
 
     # 没凭据时必须当场报错。返回空列表的话，用户会以为"这个 UP 主没发动态"，
     # 而真相是这块根本读不到东西 —— 静默失败比报错难查十倍。

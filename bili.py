@@ -444,18 +444,15 @@ class Space:
 DYN_TYPE_AV = "DYNAMIC_TYPE_AV"
 
 
-def _dyn_text(item):
-    """从一条动态里抠出能当标题用的那句话。
+#: 转发/投稿类动态里 B站塞进 desc.text 的**通用标签**。它们不是内容 ——
+#: 实测她自己的动态里清一色是「分享视频」，照发出去群里看到的就是一句废话。
+_GENERIC_DYN_TEXT = ("转发动态", "分享视频", "分享了视频", "投稿了视频",
+                     "发布了动态", "发表了动态", "分享了动态", "转发了动态")
 
-    动态的正文位置随类型变：纯文字在 desc.text，投稿在 major.archive.title，
-    图文在 major.draw.items[].description，专栏在 major.opus.title。
-    抠不到就返回空串 —— 调用方会把带它的那几行删掉，而不是发一条空的。
-    """
-    md = ((item.get("modules") or {}).get("module_dynamic") or {})
-    text = str((md.get("desc") or {}).get("text") or "").strip()
-    if text:
-        return text
-    major = md.get("major") or {}
+
+def _dyn_major_title(md):
+    """卡片主体里的标题：投稿 / 专栏 / 图文 / 通用。取不到返回空串。"""
+    major = (md or {}).get("major") or {}
     for key, field in (("archive", "title"), ("opus", "title"),
                        ("article", "title"), ("common", "title")):
         val = str((major.get(key) or {}).get(field) or "").strip()
@@ -467,6 +464,33 @@ def _dyn_text(item):
         if val:
             return val
     return ""
+
+
+def _dyn_text(item):
+    """从一条动态里抠出能当标题用的那句话。
+
+    动态的正文位置随类型变：纯文字在 desc.text，投稿在 major.archive.title，
+    图文在 major.draw.items[].description，专栏在 major.opus.title。
+
+    **通用标签要让位给真标题**：转发别人的视频时，desc.text 只是「分享视频」，
+    真正的内容在被转发那张卡片的标题里。实测踩到过（她最新 5 条动态全是这样），
+    照发出去群里就是一句废话。
+
+    抠不到就返回空串 —— 调用方会把带它的那几行删掉，而不是发一条空的。
+    """
+    md = ((item.get("modules") or {}).get("module_dynamic") or {})
+    text = str((md.get("desc") or {}).get("text") or "").strip()
+    # 转发：真内容在 **orig** 里，不在自己这层的 major 里。
+    # 实测她的转发动态：自己这层 desc 是「分享视频」、major.type 是 None，
+    # 被转发那条视频的标题在 orig.modules.module_dynamic.major.archive.title。
+    # （第一版只在自己这层找，测试又用的是扁平假结构 —— "本地过了、真实数据
+    #  没变"。教训：测试得照着真响应写。）
+    orig = item.get("orig") if isinstance(item.get("orig"), dict) else {}
+    omd = ((orig.get("modules") or {}).get("module_dynamic") or {})
+    title = _dyn_major_title(md) or _dyn_major_title(omd)
+    if title and (not text or text in _GENERIC_DYN_TEXT):
+        return title
+    return text or title
 
 
 def _fmt_time(epoch):
