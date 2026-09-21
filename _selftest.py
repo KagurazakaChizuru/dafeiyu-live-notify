@@ -871,6 +871,27 @@ def run_bili_tests(path):
     check("没有 SESSDATA 时取动态直接报错（而且不发请求）",
           bool(unresolved) and "登录态" in unresolved, repr(unresolved))
 
+    # 错的凭据不报错，只会读到空 —— 所以"凭据还有效吗"必须靠对照账号判。
+    # 这里用鸭子类型的假 Space 验判断逻辑本身，不联网。
+    class CredSpace:
+        def dynamics(self, mid, sessdata=""):
+            if sessdata == "good":
+                return [{"id": "D1", "created": 1, "text": "x", "type": "T",
+                         "link": "u"}]
+            return []
+
+    check("凭据对照：有效凭据（官方号读得到）判为 True",
+          bili.Space.sessdata_looks_ok(CredSpace(), "good") is True)
+    check("凭据对照：读不到动态（凭据死了的样子）判为 False",
+          bili.Space.sessdata_looks_ok(CredSpace(), "dead") is False)
+
+    class BoomSpace:
+        def dynamics(self, mid, sessdata=""):
+            raise bili.BiliError("HTTP 412")
+
+    check("凭据对照：取不到时返回 False，不往外抛",
+          bili.Space.sessdata_looks_ok(BoomSpace(), "x") is False)
+
     # ---- clip_text：动态可以是一整篇长文 ----
     check("短正文原样返回", live_notify.clip_text("就一句话") == "就一句话")
     check("换行和多余空格被压平",
@@ -1453,6 +1474,35 @@ def run_widget_presence_tests(path):
     check("源码里没有「引用了却没创建」的控件", not missing,
           "、".join("self." + m for m in missing[:6]))
 
+    # ---- 静态层：控件构造里的 padx/pady 不许是二元组 ----
+    #
+    # 真事故（2026-09-21）：`tk.Frame(..., pady=(0, 12))` —— 控件自身的
+    # -padx/-pady 只吃**单个**距离，Tk 收到 "0 12" 就抛 bad screen distance。
+    # 而 `.pack(pady=(0, 12))` 完全合法、长得几乎一样，肉眼扫不出来。
+    # 用 AST 扫：凡是 tk/ttk 控件构造调用里出现元组形态的 padx/pady，一律红。
+    try:
+        import ast
+        _widgets = {"Frame", "Label", "Text", "Button", "Entry", "Canvas",
+                    "Toplevel", "Checkbutton", "Radiobutton", "Listbox",
+                    "Scrollbar", "Message", "Spinbox", "PanedWindow",
+                    "LabelFrame", "Menu"}
+        _badpad = []
+        for _node in ast.walk(ast.parse(source)):
+            if not isinstance(_node, ast.Call):
+                continue
+            _fn = _node.func
+            _name = getattr(_fn, "attr", None) or getattr(_fn, "id", None)
+            if _name not in _widgets:
+                continue
+            for _kw in _node.keywords:
+                if _kw.arg in ("padx", "pady") and isinstance(_kw.value, ast.Tuple):
+                    _badpad.append("gui.py:{} {}({}=)".format(
+                        _node.lineno, _name, _kw.arg))
+        check("控件构造里的 padx/pady 不是二元组（那是 pack/grid 才吃的）",
+              not _badpad, "、".join(_badpad[:4]))
+    except SyntaxError as exc:
+        check("gui.py 能被 AST 解析", False, str(exc))
+
     # ---- 动态层 ----
     try:
         import tkinter as tk
@@ -1548,6 +1598,39 @@ def run_widget_presence_tests(path):
                   not dyn_err
                   and app.cfg["subscribe"]["sessdata"] == "test-sessdata-value",
                   str(dyn_err))
+            # 真的把每个文案库窗口开一次再关掉。
+            # 这一条才是抓得住 2026-09-21 那个崩溃的：静态扫描看的是写法，
+            # 这里走的是用户那条路 —— 点按钮、建窗口、渲染每一行。
+            opened = []
+            for _kind in sorted(gui.TEMPLATE_LIBRARY):
+                try:
+                    app._append_from_library(_kind, app.txt_sub)
+                    root.update()
+                    opened.append(_kind)
+                except Exception as exc:
+                    check("文案库「{}」能打开".format(_kind), False,
+                          "{}: {}".format(type(exc).__name__, exc))
+                for _w in list(root.winfo_children()):
+                    if isinstance(_w, tk.Toplevel):
+                        _w.destroy()
+            check("每个文案库窗口都打得开",
+                  len(opened) == len(gui.TEMPLATE_LIBRARY),
+                  "只开成 {} 个".format(len(opened)))
+
+            # 测试窗口同理：它是新加的，也是"点一下才走到"的代码
+            try:
+                app.preview_messages()
+                root.update()
+                preview_ok = True
+            except Exception as exc:
+                preview_ok = False
+                check("测试窗口能打开", False,
+                      "{}: {}".format(type(exc).__name__, exc))
+            for _w in list(root.winfo_children()):
+                if isinstance(_w, tk.Toplevel):
+                    _w.destroy()
+            check("测试窗口能打开", preview_ok)
+
             titles = [t for t, _ in live_notify.preview_messages(app.cfg)]
             check("测试窗口里出现了「新动态」这一类",
                   any("新动态" in t for t in titles), repr(titles))

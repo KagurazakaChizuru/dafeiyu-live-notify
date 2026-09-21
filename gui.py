@@ -2341,8 +2341,11 @@ class App:
                  background=BG, foreground=MUTED, font=(FONT, 9),
                  anchor="w", padx=14, pady=10).pack(fill="x")
 
-        body = tk.Frame(win, background=BG, padx=14, pady=(0, 12))
-        body.pack(fill="both", expand=True)
+        # padx/pady 的二元组只能给 pack/grid —— 控件自身的 -padx/-pady
+        # 只吃单个距离，传元组会被拼成 "0 12"，Tk 直接抛 bad screen distance。
+        # 这个坑真踩过：文案库一点开就崩，而代码看着跟 .pack(pady=(0, 12)) 一样。
+        body = tk.Frame(win, background=BG, padx=14)
+        body.pack(fill="both", expand=True, pady=(0, 12))
         for label, tpl in items:
             row = tk.Frame(body, background=CARD, highlightthickness=1,
                            highlightbackground=BORDER)
