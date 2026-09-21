@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import hmac
+import io
 import json
 import os
 import random
@@ -2272,7 +2273,7 @@ def _load_sub_state():
 def _load_chat_state():
     """群聊状态：每个群读到哪条、有哪些提醒。坏了就当空的，别拦启动。"""
     try:
-        with io.open(CHAT_STATE_PATH, encoding="utf-8") as fh:
+        with open(CHAT_STATE_PATH, encoding="utf-8") as fh:
             data = json.load(fh)
         if isinstance(data, dict):
             data.setdefault("groups", {})
@@ -2528,6 +2529,10 @@ def cmd_watch(cfg, stop_event=None):
                        at_all=False)
 
     sub_space = [None]      # 懒建：没订阅就不该去连 B 站
+    # **这一行不能少。** 实测漏过一次：后面用 chat_cfg 取配置，这里却没赋值，
+    # 于是点「开始监控」时监控线程当场 NameError 死掉 —— 群里 @ 了没反应，
+    # 开播也不会通知。自检当时全绿，因为没人跑过 cmd_watch 的启动路径。
+    chat_cfg = cfg["chat"]
 
     def check_subscriptions():
         """看订阅的 UP 主有没有新投稿。判断逻辑在 poll_subscriptions 里。"""

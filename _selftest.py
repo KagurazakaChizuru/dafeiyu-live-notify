@@ -1960,6 +1960,25 @@ def run_widget_presence_tests(path):
                   repr((_chat_err, (app.cfg.get("chat") or {}).get("cooldown_seconds"))))
             check("群聊卡上的「试一句」按钮在", hasattr(app, "lbl_chat_test"))
 
+            # 日志：**批着插**。逐行插是实测出来的卡顿源（300 行 2092 ms，
+            # 批量 13 ms，差 166 倍）—— 这条挡的是"哪天又改回逐行"。
+            _before = len(app.log_tail)
+            app._append_log(["批一", "批二", "批三"])
+            check("日志能一批插进去（不是逐行）",
+                  len(app.log_tail) == _before + 3
+                  and "批三" in app.txt_log.get("1.0", "end-1c"),
+                  repr(app.log_tail[-3:]))
+            app._append_log("单行也要能用")
+            check("_append_log 也吃单行（别处还在这么调）",
+                  app.log_tail[-1] == "单行也要能用")
+            check("一次最多攒 500 行再插", app.LOG_BATCH == 500)
+
+            # 关闭时问一句（三个按钮都在源码里，文案写明白）
+            _src = io.open(gui.__file__, encoding="utf-8").read()
+            check("点 X 会问「收进托盘 / 完全退出」",
+                  "收进托盘继续跑" in _src and "完全退出" in _src
+                  and "要退出吗？" in _src)
+
             app.var_sub_cover.set(False)
             _cov_err = app._ui_to_cfg()
             check("缩略图开关能关掉并写进配置",
@@ -2205,6 +2224,45 @@ def run_main_wiring_tests():
         ("def show_window", "有 show_window"),
     ):
         check(label, token in src)
+
+    # ---- cmd_watch 的启动路径必须真跑一次 ----
+    #
+    # 这是"接线"最容易断的地方，而且断了**测试看不见**：实测漏过一次 ——
+    # 在 cmd_watch 里用了 chat_cfg 却没赋值，自检全绿，用户点「开始监控」
+    # 直接 NameError，监控线程当场死掉（群里 @ 机器人没反应、开播也不通知）。
+    # 做法：把触发源全关（不联网）、群聊开着（就是要走那段新接线），
+    # stop_event 事先置位 —— 启动路径全跑完，循环第一圈就干净退出。
+    try:
+        import threading as _threading
+        _wcfg = live_notify.load_config(TEST_CONFIG)   # 这个作用域里没有 path
+        _wcfg["trigger"]["on_platform_live"] = False
+        _wcfg["trigger"]["on_obs_stream"] = False
+        _wcfg["trigger"]["on_process_start"] = False
+        _wcfg["trigger"]["hotkey"] = ""
+        _wcfg["chat"]["enabled"] = True          # 这段接线是重点
+        _wcfg["chat"]["backend"] = "local"
+        _wcfg["control"]["enabled"] = False
+        _stop = _threading.Event()
+        _stop.set()
+        lines3 = []
+        _orig = live_notify.log
+        live_notify.log = lambda m, l="INFO": lines3.append("{}{}".format(
+            l, m))
+        try:
+            _rc = live_notify.cmd_watch(_wcfg, _stop)
+        finally:
+            live_notify.log = _orig
+        _blob3 = "\n".join(str(x) for x in lines3)
+        check("cmd_watch 能起来并干净退出（接线没断）", _rc == 0,
+              "退出码 {}；{}".format(_rc, _blob3[-200:]))
+        check("启动横幅里有群聊那一行（chat_cfg 真的取到了）",
+              "群聊" in _blob3, _blob3[-200:])
+        check("没有任何 NameError（接线少赋值就是这种）",
+              "NameError" not in _blob3 and "Traceback" not in _blob3,
+              _blob3[-300:])
+    except Exception as exc:
+        check("cmd_watch 能起来并干净退出（接线没断）", False,
+              "{}: {}".format(type(exc).__name__, exc))
 
     # on_close 必须走托盘那条，不能直接 destroy。
     # 定位要写成 `(self)`：界面里还有别的局部函数叫 on_close（弹窗的关闭回调），
