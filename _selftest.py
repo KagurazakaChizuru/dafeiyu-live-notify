@@ -2168,6 +2168,41 @@ def run_widget_presence_tests(path):
                 check("换主题后头图像素跟着换（缓存认图，不是认算过没）",
                       bool(_before) and bool(_after) and _before != _after,
                       "{} -> {} 像素".format(len(_before), len(_after)))
+                # 深色下"关"的开关**不能是一坨白**。
+                #
+                # 她截图报过来的原话是"深色也没修好啊，页面按钮有问题"：轨道
+                # 用的是 MUTED，浅色下是深灰（#5F5F5F）看着对，深色下却是给
+                # 次要文字用的浅灰（#A0A0A0），配纯白滑块就成了白色胶囊，看着
+                # 像"开"。现在轨道/滑块各有一对按主题给的颜色。
+                # 判据用亮度：轨道必须比滑块暗，否则这开关看不出开关。
+                def _lum(hexcolor):
+                    h = hexcolor.lstrip("#")
+                    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+                    return (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+
+                def _switches(w, acc):
+                    for c in w.winfo_children():
+                        if isinstance(c, gui.ToggleSwitch):
+                            acc.append(c)
+                        _switches(c, acc)
+                    return acc
+
+                _sw = _switches(root, [])
+                _off = [s for s in _sw if not s.var.get()]
+                # 有关着的开关才测得到"关"的样子；两个数都报出来，避免这条
+                # 断言哪天变成空转还显示绿色。
+                check("界面上建出了开关，且有关着的（否则下面空转）",
+                      len(_sw) > 0 and len(_off) > 0,
+                      "共 {} 个，其中关着 {} 个".format(len(_sw), len(_off)))
+                if _off:
+                    _fills = [_off[0].itemcget(i, "fill") for i in _off[0].find_all()]
+                    _track, _knob = _fills[0], _fills[-1]
+                    check("关的开关：轨道比滑块暗（浅色下）" if gui.THEME == "light"
+                          else "关的开关：轨道比滑块暗（深色下，不是白团）",
+                          _lum(_track) < _lum(_knob) and _lum(_track) < 0.6,
+                          "轨道 {} 亮度 {:.2f} / 滑块 {} 亮度 {:.2f}".format(
+                              _track, _lum(_track), _knob, _lum(_knob)))
+
                 # 换回去，后面的断言还在用这个界面。
                 gui.apply_theme(_theme_before)
                 app.rebuild_ui()

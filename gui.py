@@ -185,6 +185,8 @@ THEMES = {
         "LOG_BG":    "#1F1F1F",
         "LOG_FG":    "#D6D6D6",
         "LOG_BAR":   "#3A3A3A",
+        "SWITCH_OFF":  "#5F5F5F",  # 关：轨道比滑块暗，一眼看得出是"关"
+        "SWITCH_KNOB": "#FFFFFF",
     },
     "dark": {
         "BG":        "#181818",   # 页面底色
@@ -208,6 +210,10 @@ THEMES = {
         "LOG_BG":    "#191919",
         "LOG_FG":    "#CFCFCF",
         "LOG_BAR":   "#333333",
+        # 深色下**不能沿用 MUTED 当轨道**：那是给次要文字用的浅灰（#A0A0A0），
+        # 配纯白滑块就成了白乎乎一坨，看着像"开"。关的轨道必须比滑块暗。
+        "SWITCH_OFF":  "#4A4A4A",
+        "SWITCH_KNOB": "#E8E8E8",
     },
 }
 
@@ -258,6 +264,7 @@ def apply_theme(name):
     global PRIMARY, PRIMARY_D, PRIMARY_S, ACCENT
     global OK_COLOR, WARN, BAD_COLOR, OK_S, WARN_S, BAD_S
     global LOG_BG, LOG_FG, LOG_BAR
+    global SWITCH_OFF, SWITCH_KNOB
     global HEAD_TEXT, HEAD_DIM, HEAD_OK, HEAD_BAD, HEAD_WARN
     global BLUE, BLUE_DARK, RED, RED_DARK
 
@@ -273,6 +280,7 @@ def apply_theme(name):
     OK_COLOR, WARN, BAD_COLOR = t["OK"], t["WARN"], t["BAD"]
     OK_S, WARN_S, BAD_S = t["OK_S"], t["WARN_S"], t["BAD_S"]
     LOG_BG, LOG_FG, LOG_BAR = t["LOG_BG"], t["LOG_FG"], t["LOG_BAR"]
+    SWITCH_OFF, SWITCH_KNOB = t["SWITCH_OFF"], t["SWITCH_KNOB"]
 
     # 头部不再是深色块了，直接用主题自身的文字色
     HEAD_TEXT = TEXT
@@ -1257,7 +1265,10 @@ class ToggleSwitch(tk.Canvas):
         self.delete("all")
         t = self._t
         r = self.H // 2
-        track = mix(MUTED, PRIMARY, t)
+        # 轨道和滑块的颜色**按主题给**，不拿 MUTED 凑 —— 深色下 MUTED 是给
+        # 次要文字用的浅灰，配上纯白滑块就是一坨白，看着像"开"（她报的
+        # "深色没修好、按钮有问题"）。
+        track = mix(SWITCH_OFF, PRIMARY, t)
         # 胶囊轨道 = 左右两个半圆 + 中间一个矩形
         self.create_oval(0, 0, self.H, self.H, fill=track, outline="")
         self.create_oval(self.W - self.H, 0, self.W, self.H,
@@ -1266,7 +1277,7 @@ class ToggleSwitch(tk.Canvas):
         pad = (self.H - self.KNOB) / 2.0
         x = pad + (self.W - self.H) * t
         self.create_oval(x, pad, x + self.KNOB, pad + self.KNOB,
-                         fill="#FFFFFF", outline="")
+                         fill=SWITCH_KNOB, outline="")
 
     def dispose(self):
         self._anim.cancel()
