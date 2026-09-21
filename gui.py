@@ -2044,12 +2044,16 @@ class App:
         为什么不用 `PhotoImage.get`：那是**逐像素一次 Tcl 调用**，780×138 就是
         十万次。导出成 PPM 再解析是 C 侧一把过，实测几毫秒。
         """
-        if getattr(self, "_src_pixels", None) is not None:
-            return self._src_pixels
         img = getattr(self, "_header_img", None)
         if img is None:
             self._src_pixels = ()
+            self._src_cache_for = None
             return ()
+        # 缓存要**认图**，不能只认"算没算过"。换主题时 _build_ui 会换掉
+        # _header_img，只认"算过"的话旧像素会被继续用 —— 表现是深色界面
+        # 配一张浅色头图。认住图的身份，这个 bug 就不可能再犯。
+        if getattr(self, "_src_cache_for", None) is img:
+            return self._src_pixels
         path = os.path.join(tempfile.gettempdir(), "dafeiyu-hdr.ppm")
         try:
             img.write(path, format="ppm")
@@ -2057,6 +2061,7 @@ class App:
                 raw = fh.read()
         except Exception:
             self._src_pixels = ()
+            self._src_cache_for = img
             return ()
         finally:
             try:
@@ -2067,6 +2072,7 @@ class App:
             self._src_pixels = _ppm_rgb(raw)
         except Exception:
             self._src_pixels = ()
+        self._src_cache_for = img
         return self._src_pixels
 
     def _header_cover(self, w, h):
@@ -2084,8 +2090,12 @@ class App:
         cache = getattr(self, "_cover_cache", None)
         if cache is None:
             cache = self._cover_cache = {}
-        if key in cache:
-            return cache[key]
+        # 缓存条目里**连图一起存**：只认宽高的话，换主题后窗口尺寸没变，
+        # 它会照样把上一张主题的缩放结果交出去 —— 跟像素缓存那个是同一个
+        # bug 的两层，一起堵住才不会"修了但没全好"。
+        hit = cache.get(key)
+        if hit is not None and hit[0] is img:
+            return hit[1]
         sw, sh, rgb = self._header_source()
         photo = None
         if rgb:
@@ -2100,7 +2110,7 @@ class App:
                 photo = None
         if len(cache) >= 3:
             cache.clear()
-        cache[key] = photo
+        cache[key] = (img, photo)
         return photo
 
     def _bg_under(self, x, y, w, h):
@@ -2229,7 +2239,14 @@ class App:
         # 整条头部的背景图。**这一句不能少** —— 少了它 _header_img 就没被赋值，
         # _paint_header 里访问会抛 AttributeError，而那是 Tk 的回调，
         # 异常会被吞掉：界面照常启动，只是头图静默消失。
+        #
+        # 换图必须**顺手把像素缓存清掉**：_header_source() 缓存的是"这张图的
+        # 像素"，换主题时图换了、缓存还是上一张，头图就会停在旧主题 ——
+        # 用户看到的正是"深色界面配浅色头图"（她报的"深浅色没调好"）。
+        # 缓存本身也认图（见 _header_source），这里是第二道保险。
         self._header_img, self._header_src = load_header_image()
+        self._src_pixels = None
+        self._src_cache_for = None
 
         # 右上角：深浅色开关。
         #

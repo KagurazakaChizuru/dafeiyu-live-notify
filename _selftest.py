@@ -2144,6 +2144,25 @@ def run_widget_presence_tests(path):
                 check("主题按钮底色取的是此刻贴的那张图",
                       isinstance(_wide, str) and _wide.startswith("#"), repr(_wide))
 
+                # 换主题，头图必须跟着换。
+                #
+                # 这里踩过一个**两层缓存**的坑：_header_source() 只记"算过没"、
+                # _header_cover() 只认宽高。切到深色后界面整片变深，头图却还是
+                # 浅色那张 —— 用户看到的正是"深色界面配浅色头图"，报过来是
+                # "深浅色没调好"。两层现在都认图（缓存条目里存着图本身），
+                # 这条断言就钉住它：换主题后取出来的像素必须不一样。
+                _before = app._header_source()
+                _theme_before = gui.THEME
+                gui.apply_theme("dark" if _theme_before == "light" else "light")
+                app.rebuild_ui()
+                _after = app._header_source()
+                check("换主题后头图像素跟着换（缓存认图，不是认算过没）",
+                      bool(_before) and bool(_after) and _before != _after,
+                      "{} -> {} 像素".format(len(_before), len(_after)))
+                # 换回去，后面的断言还在用这个界面。
+                gui.apply_theme(_theme_before)
+                app.rebuild_ui()
+
             # 登录按钮点下去会建窗口、生成二维码 —— 这条路也真的走一遍。
             # 把 QrLogin 换成一个假的（不联网），二维码本身是真的 qr.py 画的。
             class _FakeQrLogin:
