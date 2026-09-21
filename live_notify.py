@@ -714,7 +714,8 @@ def load_config(path):
         text = str(item or "")
         if text.strip():
             templates.append(text)
-    cover_size = message.get("cover_size") or [200, 112]
+    # 默认放大了：200×112 在群里看不清（她提的两次）。
+    cover_size = message.get("cover_size") or [320, 180]
     try:
         cover_size = [int(cover_size[0]), int(cover_size[1])]
     except (TypeError, ValueError, IndexError):
@@ -1609,10 +1610,35 @@ def poll_subscriptions(subscribe_cfg, state, space, announce, log=None, now=None
     announced = 0
     changed = False
 
+    # 发过的 id。**光比时间戳挡不住重复** —— 实测日志里成对出现、间隔 8 秒：
+    # 两个监控各持一份状态、或者进程被杀在保存之前，同一条就会重新变成"新的"。
+    # 所以按内容自己的身份（投稿 bvid / 动态 id）再挡一道，发过就永不再发。
+    done_ids = state.setdefault("announced", {})
+    if not isinstance(done_ids, dict):
+        done_ids = state["announced"] = {}
+
+    def already(item):
+        key = str(item.get("bvid") or item.get("id") or "")
+        return bool(key) and key in done_ids
+
+    def remember(item, stamp):
+        key = str(item.get("bvid") or item.get("id") or "")
+        if key:
+            done_ids[key] = int(stamp or 0)
+            # 只留最近 300 条，免得状态文件无限长
+            if len(done_ids) > 300:
+                for old_key, _ in sorted(done_ids.items(),
+                                         key=lambda kv: kv[1])[:len(done_ids) - 300]:
+                    done_ids.pop(old_key, None)
+
     def sweep(items, last, what, label, name, kind):
         """挑出该播报的、交给 announce，返回 (播报条数, 新基线)。"""
         newest = max(int(x.get("created") or 0) for x in items)
         if not last:
+            # 记基线的时候，把当前这批的 id 也记上 —— 它们已经是"旧的"了，
+            # 万一以后基线丢了，也不该把它们当新的发出去。
+            for x in items:
+                remember(x, x.get("created"))
             say("订阅 {}：第一次见到，记下当前最新一条，不补发{}历史。".format(
                 label, what))
             return 0, newest
@@ -1623,11 +1649,16 @@ def poll_subscriptions(subscribe_cfg, state, space, announce, log=None, now=None
                 label, what, backlog), "WARN")
         count = 0
         for x in fresh:
+            if already(x):
+                say("订阅 {}：这条{}发过了，跳过。".format(label, what))
+                remember(x, x.get("created"))
+                continue
             try:
                 announce(x, name, label, kind)
                 count += 1
             except Exception as exc:
                 say("{}播报出错：{}".format(what, exc), "ERROR")
+            remember(x, x.get("created"))
         return count, max(last, newest)
 
     for up in ups:

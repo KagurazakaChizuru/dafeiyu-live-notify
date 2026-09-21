@@ -1393,6 +1393,26 @@ def run_bili_tests(path):
     check("sessdata_from 没有就返回空串",
           bili.sessdata_from({"Set-Cookie": "a=1"}) == "")
 
+    # **同一条内容只发一次**（她报的重复）。光比时间戳挡不住：两个监控各持
+    # 一份状态、或进程被杀在保存之前，同一条会重新变成"新的"。所以按 id 再挡一道。
+    _dup_space = DynSpace([], [dyn_item("D900", 900)])
+    _dup_cfg = {"ups": [{"mid": 42, "enabled": True, "note": ""}],
+                "dynamics": True, "sessdata": "S", "at_all": False}
+    _dst = {}
+    _got = []
+    _ann = lambda item, up, label, kind: _got.append(item["id"])
+    live_notify.poll_subscriptions(_dup_cfg, _dst, _dup_space, _ann, quiet)
+    _dst["ups"]["42"]["last_dyn_created"] = 1          # 假装基线丢了
+    live_notify.poll_subscriptions(_dup_cfg, _dst, _dup_space, _ann, quiet)
+    check("发过的动态不会因为基线回退而重发", _got == [], repr(_got))
+    check("发过的 id 记在状态里（投稿用 bvid，动态用 id）",
+          "D900" in (_dst.get("announced") or {}), repr(_dst.get("announced")))
+    # 换成一条新的，就该发
+    _dup_space.dyns = [dyn_item("D900", 900), dyn_item("D901", 901)]
+    _dst["ups"]["42"]["last_dyn_created"] = 900
+    live_notify.poll_subscriptions(_dup_cfg, _dst, _dup_space, _ann, quiet)
+    check("换一条新的照常发", _got == ["D901"], repr(_got))
+
     # 监控线程捕获的是 cfg["subscribe"] 这个**引用**（cmd_watch 里
     # `subscribe_cfg = cfg["subscribe"]`），而保存配置走的是就地 update。
     # 所以勾上开关保存之后，正在跑的轮询下一轮就读到了 —— 不用重启。
