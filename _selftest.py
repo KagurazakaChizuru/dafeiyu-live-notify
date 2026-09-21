@@ -2366,9 +2366,20 @@ def run_main_wiring_tests():
     # 只写 `def on_close` 会命中那一个 —— 实测被这条误伤过一次。
     i_close = src.find("def on_close(self)")
     if i_close > 0:
-        tail = src[i_close:i_close + 1400]
-        check("on_close 收进托盘而不是直接退出",
-              "hide_window()" in tail and "self.root.destroy()" not in tail)
+        # 切到下一个方法为止，别用固定长度：写死 1400 字符时，一旦 on_close
+        # 变长就会把后面的方法切进来，断言跟着变成"查了个隔壁函数"。
+        nxt = src.find("\n    def ", i_close + 10)
+        tail = src[i_close:nxt if nxt > 0 else i_close + 2400]
+        # 1.8.0 起点 X 是**先问**（收进托盘继续跑 / 完全退出 / 取消），不再直接收起来。
+        # 原来这条只查"有没有 hide_window()" —— 那正是用户说"关闭按钮的反馈没处理好"
+        # 时它照样全绿的原因：字符串在，行为不对。所以现在分开钉三件事。
+        check("on_close 会先问（有「要退出吗」那个弹窗）",
+              "要退出吗" in tail and "hide_window()" in tail)
+        check("on_close 里有真退出的路（quit_all → _teardown_and_destroy）",
+              "def quit_all" in tail and "_teardown_and_destroy()" in tail)
+        check("三个选项都在（收进托盘 / 完全退出 / 取消）",
+              all(t in tail for t in ("收进托盘继续跑", "完全退出", "取消")))
+        check("on_close 没有直接 destroy 主窗口", "self.root.destroy()" not in tail)
     else:
         check("找得到 App.on_close", False)
 
