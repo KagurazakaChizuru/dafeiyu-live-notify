@@ -42,6 +42,11 @@ try:
 except ImportError:                  # 缺文件时登录按钮会说清楚，不影响别的
     core_qr = None
 
+try:
+    import groupchat as core_chat     # 群聊：@机器人 说话 / 记提醒
+except ImportError:
+    core_chat = None
+
 
 def _resolve_data_dir():
     """确定「程序数据目录」（config.json / napcat / qq-napcat / logs 所在处）。
@@ -2750,6 +2755,12 @@ class App:
                          "不会同一个视频报两遍。",
                   indent=24, pady=(2, 4))
 
+        self.var_sub_cover = tk.BooleanVar()
+        check(scard, self.var_sub_cover, "播报带一张小封面", bold=False)
+        card_hint(scard, "用 B站图床自己的缩放参数取小图（原图 250 KB → 缩略图 5 KB），"
+                         "不下载、不占带宽。尺寸跟开播封面共用「消息与设置」里那个。",
+                  indent=24, pady=(2, 8))
+
         lrow = tk.Frame(scard, background=CARD)
         lrow.pack(fill="x", padx=(24, 0), pady=(0, 8))
         ttk.Button(lrow, text="登录 B站（扫码）", width=18,
@@ -2790,6 +2801,49 @@ class App:
         self.lbl_sub_count = tk.Label(abtn, text="", background=CARD,
                                       foreground=MUTED, font=(FONT, 9))
         self.lbl_sub_count.pack(side="right")
+
+        # ---------------- 群聊 ----------------
+        self.var_chat_on = tk.BooleanVar()
+        self.var_chat_cool = tk.StringVar()
+
+        c_outer, ccard = make_card(page, "群友 @机器人 可以和 AI 聊天")
+        c_outer.pack(fill="x", pady=(14, 0))
+        check(ccard, self.var_chat_on, "① 允许群友 @机器人 聊天")
+        card_hint(ccard, "走 DSH 的 **groupchat** 档案 —— 那个档案里所有工具插件"
+                         "都禁掉了，它手里没有任何能动手的东西（不是靠嘱咐它"
+                         "别乱来，是**根本没有工具**）。\n"
+                         "顺便能记提醒：群友说「@我 提醒我 21:30 交作业」就行。",
+                  indent=24, pady=(2, 8))
+
+        self.var_chat_backend = tk.StringVar()
+        self.var_chat_model = tk.StringVar()
+        brow = tk.Frame(ccard, background=CARD)
+        brow.pack(fill="x", padx=(24, 0), pady=(2, 0))
+        tk.Label(brow, text="用哪个模型", background=CARD, foreground=TEXT,
+                 font=(FONT, 9)).pack(side="left")
+        ttk.Combobox(brow, textvariable=self.var_chat_backend, width=10,
+                     state="readonly",
+                     values=("local", "dsh")).pack(side="left", padx=(8, 8))
+        ttk.Entry(brow, textvariable=self.var_chat_model, width=18,
+                  font=(FONT, 9)).pack(side="left")
+        tk.Label(brow, text="local = 本机模型（不花 token）；dsh = DSH 的 groupchat 档案",
+                 background=CARD, foreground=MUTED,
+                 font=(FONT, 9)).pack(side="left", padx=8)
+
+        crow = tk.Frame(ccard, background=CARD)
+        crow.pack(fill="x", padx=(24, 0))
+        tk.Label(crow, text="同一个人两次提问至少隔", background=CARD,
+                 foreground=MUTED, font=(FONT, 9)).pack(side="left")
+        ttk.Entry(crow, textvariable=self.var_chat_cool, width=6,
+                  font=(FONT, 9)).pack(side="left", padx=4)
+        tk.Label(crow, text="秒（防刷屏）", background=CARD, foreground=MUTED,
+                 font=(FONT, 9)).pack(side="left")
+        ttk.Button(crow, text="试一句", width=10,
+                   command=self.test_chat).pack(side="left", padx=(12, 0))
+        self.lbl_chat_test = tk.Label(ccard, text="", background=CARD,
+                                      foreground=MUTED, font=(FONT, 9),
+                                      anchor="w", justify="left", wraplength=700)
+        self.lbl_chat_test.pack(anchor="w", padx=(24, 0), pady=(6, 0))
 
         # ---------------- 保存 ----------------
         # 「保存设置」原来只在「消息与设置」页最下面，而订阅开关在这一页 ——
@@ -3166,7 +3220,9 @@ class App:
         card_hint(tcard,
                   "**真的会发出去，但只发到这个 QQ，不进任何群。**\n"
                   "填你自己的号，别填机器人的号 —— QQ 一般不允许给自己发私聊。\n"
-                  "时长、峰值、UP 主名字、动态正文都是编的，只为看格式和文案。",
+                  "时长、峰值、UP 主名字、动态正文都是编的，只为看格式和文案。\n"
+                  "新投稿 / 新动态这两条会带一张示例图（程序自带的），"
+                  "真通知里那个位置是对方的封面。",
                   indent=0, pady=(6, 0))
 
         # ---------------- 保存 ----------------
@@ -3507,6 +3563,7 @@ class App:
         sc = self.cfg.get("subscribe") or {}
         self.var_sub_on.set(bool(sc.get("enabled", False)))
         self.var_sub_dyn.set(bool(sc.get("dynamics", False)))
+        self.var_sub_cover.set(bool(sc.get("cover", True)))
         self.var_sub_sec.set(str(int(sc.get("poll_seconds", 300) or 300)))
         self.txt_sub.delete("1.0", "end")
         self.txt_sub.insert("1.0", join_templates(sc))
@@ -3514,6 +3571,11 @@ class App:
         self.txt_dyn.insert("1.0", join_templates(
             {"templates": sc.get("dyn_templates") or [],
              "template": sc.get("dyn_template") or ""}))
+        ch = self.cfg.get("chat") or {}
+        self.var_chat_on.set(bool(ch.get("enabled", False)))
+        self.var_chat_cool.set(str(int(ch.get("cooldown_seconds", 20) or 20)))
+        self.var_chat_backend.set(str(ch.get("backend") or "local"))
+        self.var_chat_model.set(str(ch.get("local_model") or "qwen2.5:3b"))
         self._refresh_sub_tree()
         self._refresh_sub_login()
 
@@ -3642,6 +3704,7 @@ class App:
             self.cfg.setdefault("subscribe", {}).update({
                 "enabled": bool(self.var_sub_on.get()),
                 "dynamics": bool(self.var_sub_dyn.get()),
+                "cover": bool(self.var_sub_cover.get()),
                 "poll_seconds": num(self.var_sub_sec, "订阅轮询间隔", 60, 86400),
                 "at_all": bool(sub_old.get("at_all", False)),
             })
@@ -3654,6 +3717,24 @@ class App:
                 self.cfg["subscribe"]["dyn_template"] = _dblocks[0]
                 self.cfg["subscribe"]["dyn_templates"] = (
                     _dblocks if len(_dblocks) > 1 else [])
+
+            # 群聊。就地 update —— 这里也有界面上不暴露的键
+            # （dsh_profile / node / dsh_bin / at_only）。
+            _chat = self.cfg.setdefault("chat", {})
+            _chat.update({
+                "enabled": bool(self.var_chat_on.get()),
+                "cooldown_seconds": num(self.var_chat_cool, "群聊冷却", 0, 3600),
+                "backend": (self.var_chat_backend.get() or "local").strip(),
+                "local_model": self.var_chat_model.get().strip(),
+            })
+            if self.var_chat_on.get() and core_chat is not None:
+                _n, _b = core_chat.find_dsh(_chat.get("node"), _chat.get("dsh_bin"))
+                if not (_n and _b):
+                    raise ValueError(
+                        "开了群聊，但找不到 node 或 dsh。\n\n"
+                        "程序会去找 node.exe 和 @deepseek-ai/dsh 的 bin.js；"
+                        "找不到就在配置里手填 chat.node / chat.dsh_bin。\n"
+                        "（也可以在命令行跑一次：dsh --profile groupchat \"你好\"）")
 
             # 下播文案跟开播一样是多条，用单独一行 --- 分隔。
             # 存的时候铺开成 templates 列表 + template（第一条）——
@@ -3826,6 +3907,52 @@ class App:
         self.lbl_sub_login.config(
             text="B站登录态：已保存" if sess else "B站登录态：未登录（动态要用）",
             foreground=OK_COLOR if sess else MUTED)
+
+    def test_chat(self):
+        """真的问一次 DSH，把大肥鱼的回话显示出来。
+
+        为什么要这个按钮：群聊这东西不开张就不知道通不通 —— 配置对不对、
+        node 找不找得到、档案在不在、模型答不答，全都要真跑一次才知道。
+        这条路**只问模型、不发群**。
+        """
+        if core_chat is None:
+            messagebox.showerror("缺 groupchat.py", "群聊功能需要 app\\groupchat.py。")
+            return
+        self.lbl_chat_test.config(text="正在问大肥鱼 …（一次要十几秒）",
+                                  foreground=MUTED)
+
+        cfg = dict(self.cfg.get("chat") or {})
+        cfg["enabled"] = True
+        bot = core_chat.ChatBot(cfg, None, log=core.log)
+
+        def work():
+            return bot._ask_backend("在群里打个招呼，顺便说说你是干什么的")
+
+        def done(res):
+            if isinstance(res, BaseException):
+                self.lbl_chat_test.config(text="✘ 没答上来：{}".format(res),
+                                          foreground=BAD_COLOR)
+                return
+            text = core_chat.clean_reply(res, 200)
+            self.lbl_chat_test.config(text="✔ 大肥鱼说：" + text,
+                                      foreground=OK_COLOR)
+            core.log("群聊试一句：{}".format(text))
+
+        self.run_async(work, done)
+
+    def _sample_thumb(self):
+        """私聊测试里那张示例图。
+
+        用程序**自带**的一张图（本地文件，不联网）—— 真通知里那个位置是视频或
+        动态的封面。这样点一下就能在 QQ 里看见图片段长什么样，而不用等真的
+        有人发新视频。
+        """
+        for name in ("header-light.png", "header-dark.png", "app.ico"):
+            for root in (HERE, os.path.join(HERE, "_build")):
+                path = os.path.join(root, name)
+                if os.path.isfile(path):
+                    return "file:///" + path.replace("\\", "/")
+        return ""
 
     def _save_sessdata(self, sess):
         """把登录态写进配置。**只动订阅这几个键。**"""
@@ -4569,9 +4696,16 @@ class App:
         else:
             text = core.render_text(self.cfg, extra={"game": "测试游戏"})
 
+        # 订阅那两类可以顺手带上示例图：图片段到底长什么样，看一眼就知道，
+        # 不用等真的有人发新视频。别的类目不带（它们的图是直播封面，走另一条路）。
+        message = text
+        if kind in ("video", "dynamic") and self.var_sub_cover.get():
+            message = core.build_message({"at_all": False, "at_list": []}, text,
+                                         image=self._sample_thumb())
+
         def work():
             ob = core.OneBot(self.cfg["onebot"])
-            ok, data = ob.send_private_msg(int(target), text)
+            ok, data = ob.send_private_msg(int(target), message)
             if not ok:
                 raise RuntimeError(str(data))
             return text

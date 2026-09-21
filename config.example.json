@@ -75,6 +75,24 @@
     "poll_seconds": 30,
     "platform_proxy": ""
   },
+  "chat": {
+    "enabled": false,
+    "groups": [],
+    "poll_seconds": 5,
+    "cooldown_seconds": 20,
+    "max_reply_chars": 200,
+    "timeout_seconds": 90,
+    "backend": "local",
+    "local_url": "http://127.0.0.1:11434/v1/chat/completions",
+    "local_model": "qwen2.5:3b",
+    "local_key": "",
+    "dsh_profile": "groupchat",
+    "node": "",
+    "dsh_bin": "",
+    "reminder": true,
+    "at_only": true
+  },
+
   "control": {
     "enabled": true,
     "port": 8899,
@@ -95,6 +113,7 @@
     "dynamics": false,
     "dyn_template": "💬 {up} 发了条动态\n\n{text}\n{link}",
     "dyn_templates": [],
+    "cover": true,
     "sessdata": "",
     "at_all": false
   },

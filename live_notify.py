@@ -75,6 +75,11 @@ try:
 except ImportError:                # 缺文件时订阅功能整体降级
     bili = None
 
+try:
+    import groupchat               # 群聊：@机器人 说话 / 记提醒（走 DSH）
+except ImportError:                # 缺文件时群聊整体降级
+    groupchat = None
+
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
 VERSION = "1.8.0"
@@ -101,6 +106,8 @@ LOG_DIR = os.path.join(BASE_DIR, "logs")
 #: 放在 logs 下是有实际理由的 —— 打包时那个目录要被排除，
 #: 状态文件跟着它走，就不会意外被打进发布包。
 SUB_STATE_PATH = os.path.join(LOG_DIR, "subscribe-state.json")
+#: 群聊记着"每个群读到哪条了"和"有哪些提醒"，重启不能丢
+CHAT_STATE_PATH = os.path.join(LOG_DIR, "chat-state.json")
 
 # --------------------------------------------------------------------------
 #  内置文案池
@@ -352,6 +359,23 @@ def _time_pools(kind, now=None):
 #: 投稿类动态。它跟 arc/search 拿到的是**同一件事** —— 两个都播报，同一个
 #: 视频就会在群里出现两遍。所以动态那一路按 type 把它跳过。
 DYN_TYPE_AV = getattr(bili, "DYN_TYPE_AV", "DYNAMIC_TYPE_AV") if bili else "DYNAMIC_TYPE_AV"
+
+
+def thumb_url(url, width=0, height=0):
+    """给 B站图床的地址缀上缩放参数，让 CDN 直接返回小图。
+
+    实测原图 155 KB，缀上 `@200w_112h_1c.webp` 只有 6.4 KB —— 群里看个大概就够，
+    也省得我们下载、缩放、再上传（那还得引 Pillow）。
+    同一套规则 triggers.BilibiliRoom.cover_url 里也有一份（那边是直播封面）；
+    没合并是因为 live_notify 对 triggers 是**软导入**，订阅不该跟着一起缺文件。
+    """
+    url = str(url or "").strip()
+    if not url or not width or not height:
+        return url
+    # 已经是带参数的地址就别叠了（叠了 CDN 会 404）
+    if "@" in url.split("//", 1)[-1]:
+        return url
+    return "{}@{}w_{}h_1c.webp".format(url, int(width), int(height))
 
 
 def clip_text(text, limit=140):
@@ -850,8 +874,44 @@ def load_config(path):
                           if str(x).strip()]
                          or _own_first(subscribe.get("dyn_template"),
                                        TEMPLATE_POOLS["dynamic"]),
+        # 带不带缩略图。默认带 —— 群里一张小图比一行字显眼得多。
+        "cover": _as_bool(subscribe.get("cover", True), True),
         # 登录态。**不要**放进日志、不要出现在打包产物里（见 _package.ps1）。
         "sessdata": str(subscribe.get("sessdata") or ""),
+    }
+
+    # --- chat：群友 @机器人 说话（走 DSH），顺便记提醒 ---
+    #
+    # 默认关。理由跟订阅一样：一个会往外发消息、还会花模型额度的功能，
+    # 不该因为"配置里少写一个开关"就自己跑起来。
+    chat = raw.get("chat") or {}
+    if not isinstance(chat, dict):
+        raise ConfigError("chat 必须是一个对象。")
+    chat_cfg = {
+        "enabled": _as_bool(chat.get("enabled", False), False) and groupchat is not None,
+        # 空 = 用「通知群」里启用的那几个群
+        "groups": [int(g) for g in (chat.get("groups") or [])],
+        # 群消息是本地 NapCat 的接口，问勤一点没关系
+        "poll_seconds": max(3.0, _as_num(chat.get("poll_seconds"), 5.0,
+                                         "chat.poll_seconds")),
+        "cooldown_seconds": max(0.0, _as_num(chat.get("cooldown_seconds"), 20.0,
+                                             "chat.cooldown_seconds")),
+        "max_reply_chars": max(20, int(_as_num(chat.get("max_reply_chars"), 200,
+                                               "chat.max_reply_chars"))),
+        "timeout_seconds": max(10.0, _as_num(chat.get("timeout_seconds"), 90.0,
+                                             "chat.timeout_seconds")),
+        # 走哪条后端。默认 local —— 群里闲聊烧 API 额度顶不住。
+        "backend": str(chat.get("backend") or "local").lower(),
+        "local_url": str(chat.get("local_url")
+                          or "http://127.0.0.1:11434/v1/chat/completions"),
+        "local_model": str(chat.get("local_model") or "qwen2.5:3b"),
+        "local_key": str(chat.get("local_key") or ""),
+        # 用哪个 DSH 档案。**必须是禁掉工具的那个**，别改成 web/desktop。
+        "dsh_profile": str(chat.get("dsh_profile") or "groupchat"),
+        "node": str(chat.get("node") or ""),
+        "dsh_bin": str(chat.get("dsh_bin") or ""),
+        "reminder": _as_bool(chat.get("reminder", True), True),
+        "at_only": _as_bool(chat.get("at_only", True), True),
     }
 
     # --- 模板占位符校验（不报错，只记下来给 check 看）---
@@ -863,6 +923,7 @@ def load_config(path):
         "reminder": reminder_cfg,
         "game": game_cfg,
         "subscribe": subscribe_cfg,
+        "chat": chat_cfg,
     }
 
     # --- behavior / control ---
@@ -965,6 +1026,7 @@ def load_config(path):
         "trigger": trigger_cfg,
         "offline_message": offline_cfg,
         "subscribe": subscribe_cfg,
+        "chat": chat_cfg,
         "ui": ui_cfg,
         "_path": os.path.abspath(path),
         # 模板里拼错的占位符。这里查出来给 check 用，**不拦启动** ——
@@ -2207,6 +2269,20 @@ def _load_sub_state():
         return {}
 
 
+def _load_chat_state():
+    """群聊状态：每个群读到哪条、有哪些提醒。坏了就当空的，别拦启动。"""
+    try:
+        with io.open(CHAT_STATE_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            data.setdefault("groups", {})
+            data.setdefault("reminders", [])
+            return data
+    except (OSError, ValueError):
+        pass
+    return {"groups": {}, "reminders": []}
+
+
 def _save_sub_state(state):
     """原子写入（先写 .tmp 再 replace），免得断电时留下半个文件。"""
     try:
@@ -2462,6 +2538,13 @@ def cmd_watch(cfg, stop_event=None):
             sub_space[0] = bili.Space()      # 懒建：没订阅就不该去连 B 站
         state = _load_sub_state()
 
+        def thumb_of(item):
+            """要带图就返回缩略图地址，否则空串。尺寸跟开播封面共用一份配置。"""
+            if not subscribe_cfg.get("cover", True):
+                return ""
+            size = cfg["message"].get("cover_size") or [200, 112]
+            return thumb_url(item.get("cover"), size[0], size[1])
+
         def announce(item, up_name, label, kind):
             if kind == "dynamic":
                 log("订阅更新：{} 发了条动态".format(label))
@@ -2474,7 +2557,8 @@ def cmd_watch(cfg, stop_event=None):
                     extra_fields={"up": up_name,
                                   "text": clip_text(item.get("text")),
                                   "link": item["link"]},
-                    at_all=bool(subscribe_cfg.get("at_all", False)))
+                    at_all=bool(subscribe_cfg.get("at_all", False)),
+                    image=thumb_of(item))
                 return
             log("订阅更新：{} 发了《{}》".format(label, item["title"]))
             send_to_groups(
@@ -2485,12 +2569,22 @@ def cmd_watch(cfg, stop_event=None):
                                    kind="video"),
                 extra_fields={"up": up_name, "title": item["title"],
                               "link": item["link"]},
-                at_all=bool(subscribe_cfg.get("at_all", False)))
+                at_all=bool(subscribe_cfg.get("at_all", False)),
+                image=thumb_of(item))
 
         _, changed = poll_subscriptions(subscribe_cfg, state, sub_space[0],
                                         announce, log)
         if changed:
             _save_sub_state(state)
+
+    # 群聊机器人。默认关；开着的时候它只理 @机器人 的话。
+    chat_cfg["_notify_groups"] = [g for g in cfg["groups"] if g.get("enabled")]
+    chat_bot = None
+    if chat_cfg.get("enabled") and groupchat is not None:
+        chat_state = _load_chat_state()
+        chat_bot = groupchat.ChatBot(chat_cfg, onebot, log=log,
+                                     state=chat_state,
+                                     state_path=CHAT_STATE_PATH)
 
     engine = TriggerEngine(cfg, fire) if tg.get("on_process_start") else None
 
@@ -2654,6 +2748,8 @@ def cmd_watch(cfg, stop_event=None):
         log("订阅新投稿：{} 个 UP，每 {} 秒查一次（B站公开接口）".format(
             len([u for u in subscribe_cfg["ups"] if u.get("enabled")]),
             int(subscribe_cfg["poll_seconds"])))
+        if subscribe_cfg.get("cover", True):
+            log("订阅播报带封面小图（用 B站图床的缩放参数，不占带宽）")
         if subscribe_cfg.get("dynamics"):
             log("订阅新动态：也开着（只播报订阅之后发的，投稿类动态自动跳过）")
         elif str(subscribe_cfg.get("sessdata") or "").strip():
@@ -2661,6 +2757,15 @@ def cmd_watch(cfg, stop_event=None):
         else:
             log("订阅新动态：关着（动态接口要登录态，配置里没有 subscribe.sessdata）",
                 "WARN")
+    if chat_cfg.get("enabled"):
+        log("群聊：@机器人 可以聊天（{}）".format(
+            chat_bot.backend_name() if chat_bot is not None
+            else chat_cfg.get("backend", "local")))
+        if chat_cfg.get("reminder", True):
+            log("群聊：也能记提醒（「@我 提醒我 21:30 交作业」这种）")
+    elif groupchat is None:
+        log("群聊：未启用（缺 groupchat.py）", "WARN")
+
     if cfg["behavior"]["dry_run"]:
         log("当前是彩排模式（dry_run=true），不会真的发消息。", "WARN")
     log("=" * 62)
@@ -2668,6 +2773,7 @@ def cmd_watch(cfg, stop_event=None):
     try:
         next_aux = 0.0
         next_sub = 0.0
+        next_chat = 0.0
         while True:
             if stop_event is not None and stop_event.is_set():
                 log("监控已停止。")
@@ -2696,6 +2802,20 @@ def cmd_watch(cfg, stop_event=None):
                         check_subscriptions()
                     except Exception as exc:
                         log("订阅检查出错：{}".format(exc), "ERROR")
+            # 群聊：读群消息、看看有没有到点的提醒。
+            # 用的是本机 NapCat 的接口，几秒一次不心疼；真正慢的是问模型那一步，
+            # 那一步在后台线程里跑（见 groupchat._ask），不会卡住这个循环。
+            if chat_bot is not None and now >= next_chat:
+                next_chat = now + float(chat_cfg.get("poll_seconds") or 5.0)
+                try:
+                    chat_bot.poll()
+                except Exception as exc:
+                    log("群聊读消息出错：{}".format(exc), "ERROR")
+                try:
+                    chat_bot.fire_due()
+                except Exception as exc:
+                    log("群聊提醒出错：{}".format(exc), "ERROR")
+
             # 分片 sleep：让"停止监控"能立刻生效，而不是干等满一个间隔
             interval = cfg["watch"]["interval_seconds"] if engine is not None else 1
             deadline = time.time() + interval
@@ -2946,6 +3066,8 @@ def cmd_check(cfg):
         log("  [OK] UP 主订阅配好了（{} 个，每 {} 秒查一次）。".format(
             len([u for u in sub.get("ups") or [] if u.get("enabled")]),
             int(sub.get("poll_seconds") or 300)))
+        if sub.get("cover", True):
+            log("  [OK] 播报会带一张封面小图。")
         if sub.get("dynamics"):
             log("  [OK] 新动态也开着。")
             # 这句是给"过了一个月突然收不到动态"准备的：那种情况下接口不报错，
@@ -2968,6 +3090,41 @@ def cmd_check(cfg):
             log("  [-] 新动态没开（订阅只管投稿）。")
     else:
         log("  [-] 没开 UP 主订阅。")
+
+    ch = cfg.get("chat") or {}
+    if ch.get("enabled"):
+        log("  [OK] 群聊开着（只理 @机器人 的话）。")
+        if groupchat is None:
+            log("  [X] 缺 groupchat.py，群聊不会生效。", "WARN")
+        elif str(ch.get("backend")) == "dsh":
+            _node, _bin = groupchat.find_dsh(ch.get("node"), ch.get("dsh_bin"))
+            if _node and _bin:
+                log("  [OK] 后端是 DSH（{} 档案），找得到 node 和 dsh。".format(
+                    ch.get("dsh_profile")))
+            else:
+                log("  [X] 找不到 node/dsh —— 群聊问了也没人答。"
+                    "可在 chat.node / chat.dsh_bin 里手填路径。", "WARN")
+        else:
+            _url = str(ch.get("local_url") or "")
+            _ok = False
+            try:
+                import urllib.request as _u
+                _op = _u.build_opener(_u.ProxyHandler({}))
+                with _op.open(_url.replace("/chat/completions", "/models"),
+                              timeout=3) as _r:
+                    _ok = _r.status == 200
+            except Exception:
+                _ok = False
+            if _ok:
+                log("  [OK] 后端是本地模型（{}），服务在。".format(
+                    ch.get("local_model")))
+            else:
+                log("  [X] 后端是本地模型，但连不上 {} —— 群聊问了也没人答。"
+                    "（没装就先装 Ollama，再 ollama pull {}；想改用 API 就把 "
+                    "chat.backend 设成 dsh）".format(_url, ch.get("local_model")),
+                    "WARN")
+    else:
+        log("  [-] 没开群聊。")
 
     if not any(g.get("enabled") for g in cfg["groups"]):
         log("  [X] 一个启用的群都没有。", "WARN")

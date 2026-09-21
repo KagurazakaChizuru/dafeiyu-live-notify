@@ -1062,6 +1062,211 @@ def run_bili_tests(path):
           and all(row[0] == 0 and row[-1] == 0 for row in _bordered),
           "边长 {}".format(len(_bordered)))
 
+    # ---- 群聊：时间解析、触发、去重、提醒 ----
+    import groupchat as gc
+    from datetime import datetime
+    _base = datetime(2026, 9, 21, 21, 0, 0).timestamp()
+    _cases = [("21:30", "09-21 21:30"), ("9点半", "09-22 09:30"),
+              ("30分钟后", "09-21 21:30"), ("2小时后", "09-21 23:00"),
+              ("明天早上8点", "09-22 08:00"), ("后天中午12点", "09-23 12:00"),
+              ("晚上12点", "09-22 00:00"), ("早上8点", "09-22 08:00")]
+    _bad = []
+    for text, want in _cases:
+        got = gc.parse_when(text, now=_base)
+        if not got or datetime.fromtimestamp(got).strftime("%m-%d %H:%M") != want:
+            _bad.append("{}→{}".format(
+                text, datetime.fromtimestamp(got).strftime("%m-%d %H:%M")
+                if got else "看不懂"))
+    check("提醒时间解析（8 种写法）", not _bad, "；".join(_bad))
+    check("看不懂的时间给 None，不瞎猜",
+          gc.parse_when("随便什么时候", now=_base) is None
+          and gc.parse_when("", now=_base) is None)
+
+    _segs = [{"type": "at", "data": {"qq": "10001"}},
+             {"type": "text", "data": {"text": " 你好呀"}}]
+    check("认得出「在跟我说话」", gc.ChatBot.mentions(_segs, "10001"))
+    check("别人被 @ 不算", not gc.ChatBot.mentions(_segs, "10002"))
+    check("只取文字段（图片不参与触发）",
+          gc.ChatBot.message_text(_segs + [{"type": "image",
+                                            "data": {"file": "x"}}]) == "你好呀")
+    check("回复会去掉 Markdown 记号并压成一行",
+          gc.clean_reply("**重点**：\n\n- 第一条\n- 第二条", 60)
+          == "重点： 第一条 第二条")
+    check("超长回复会截断并加省略号",
+          gc.clean_reply("字" * 100, 20).endswith("…"))
+
+    # 收消息 → 触发 → 回话：一条龙，用假的 OneBot 和假的 runner，不联网
+    class FakeBot(object):
+        def __init__(self, msgs):
+            self.msgs = msgs
+            self.sent = []
+            self.calls = []
+
+        def call(self, action, payload):
+            self.calls.append(action)
+            if action == "get_login_info":
+                return True, {"user_id": 10001}
+            if action == "get_group_msg_history":
+                return True, {"messages": self.msgs[payload["group_id"]]}
+            if action == "send_group_msg":
+                self.sent.append(payload)
+                return True, {"message_id": 1}
+            return True, {}
+
+    _msgs = {
+        111: [
+            {"message_seq": 5, "user_id": 10001, "message": []},       # 机器人自己
+            {"message_seq": 6, "user_id": 20002, "message": [
+                {"type": "text", "data": {"text": "随便说点什么"}}]},   # 没 @
+            {"message_seq": 7, "user_id": 20003, "message": [
+                {"type": "at", "data": {"qq": "10001"}},
+                {"type": "text", "data": {"text": " 提醒我 30分钟后 喝水"}}]},
+        ]
+    }
+    _fb = FakeBot(_msgs)
+    _bot = gc.ChatBot({"enabled": True, "groups": [111], "at_only": True,
+                       "reminder": True, "cooldown_seconds": 0},
+                      _fb, state={"groups": {}, "reminders": []},
+                      runner=lambda p: "（不该被叫到）")
+    _n = _bot.poll()
+    check("只处理 @了机器人的那条", _n == 1, repr(_n))
+    check("记下提醒并回话", len(_bot.state["reminders"]) == 1
+          and _fb.sent and "记下了" in _fb.sent[0]["message"][-1]["data"]["text"],
+          repr((_bot.state.get("reminders"), _fb.sent)))
+    _saved = _bot.state["groups"]["111"]
+    _fb2 = FakeBot(_msgs)
+    _bot2 = gc.ChatBot({"enabled": True, "groups": [111], "at_only": True},
+                       _fb2, state=dict(_bot.state, groups={"111": _saved}),
+                       runner=lambda p: "x")
+    _before = len(_bot2.state["reminders"])
+    check("同一条消息不会重复处理",
+          _bot2.poll() == 0
+          and len(_bot2.state["reminders"]) == _before
+          and not _fb2.sent,
+          repr((_bot2.state, _fb2.sent)))
+
+    # 到点要发出来
+    _fb3 = FakeBot({111: []})
+    _b3 = gc.ChatBot({"enabled": True, "groups": [111]}, _fb3, state={
+        "groups": {}, "reminders": [{"id": 1, "group": 111, "user": "20003",
+                                     "at": _base - 10, "text": "喝水"}]})
+    check("到点的提醒会发出来",
+          _b3.fire_due(now=_base) == 1
+          and "喝水" in _fb3.sent[0]["message"][-1]["data"]["text"],
+          repr(_fb3.sent))
+    check("发过的提醒不会留着", _b3.state["reminders"] == [])
+
+    # 后端选择：默认本地，而且本地这条路要带人设、不花 API
+    _calls = []
+
+    class _FakeResp(object):
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"choices": [
+                {"message": {"content": "好喵～"}}]}).encode("utf-8")
+
+    import urllib.request as _urq
+    _real_open = _urq.OpenerDirector.open
+
+    def _spy_open(self, req, **kw):
+        _calls.append(req)
+        return _FakeResp()
+
+    _urq.OpenerDirector.open = _spy_open
+    try:
+        _bc = gc.ChatBot({"local_model": "qwen2.5:3b"}, None)
+        _reply = _bc._ask_backend("今晚吃啥")
+    finally:
+        _urq.OpenerDirector.open = _real_open
+    _sent = json.loads(_calls[0].data.decode("utf-8")) if _calls else {}
+    check("默认走本地模型（群里闲聊不烧 API）",
+          _reply == "好喵～" and "11434" in _calls[0].full_url, repr(_calls[:1]))
+    check("本地这条路上带了人设和大肥鱼的口吻",
+          "猫娘女仆" in _sent.get("messages", [{}])[0].get("content", ""),
+          repr(_sent.get("messages", [])[:1]))
+    check("问的话原样传进去",
+          _sent.get("messages", [{}, {}])[1].get("content") == "今晚吃啥")
+    check("后端能切回 DSH",
+          gc.ChatBot({"backend": "dsh"}, None).backend_name().startswith("DSH"))
+    check("后端名默认报本地模型",
+          "本地模型" in gc.ChatBot({}, None).backend_name())
+
+    # 开关是**每轮重新看**的：界面关掉、保存，下一轮就停，不用重启监控
+    _fb5 = FakeBot({111: []})
+    _b5 = gc.ChatBot({"enabled": False, "groups": [111]}, _fb5,
+                     state={"groups": {}, "reminders": []})
+    check("关着的时候一个请求都不发", _b5.poll() == 0 and not _fb5.calls)
+    _b5.cfg["enabled"] = True          # 就是界面保存时发生的事（就地改）
+    _b5.poll()
+    check("就地打开之后下一轮就开始读消息",
+          "get_group_msg_history" in _fb5.calls, repr(_fb5.calls))
+
+    # 调 dsh 的那条命令：**不许有 shell**
+    _argv = []
+    _real_run = gc.subprocess.run
+
+    def _spy(argv, **kw):
+        _argv.append((argv, kw))
+        class R(object):
+            returncode = 0
+            stdout = "好喵～".encode("utf-8")
+            stderr = b""
+        return R()
+
+    gc.subprocess.run = _spy
+    try:
+        _b4 = gc.ChatBot({"dsh_profile": "groupchat"}, None)
+        _b4._run_dsh('带引号 " 和 %PATH% 和 & dir')
+    finally:
+        gc.subprocess.run = _real_run
+    check("问 DSH 走的是 node + bin.js，**不经过 shell**",
+          _argv and _argv[0][0][0].lower().endswith("node.exe")
+          and not _argv[0][1].get("shell"),
+          repr(_argv[0][0][:2] if _argv else None))
+    check("群里那句话是当成**一个参数**传进去的（不会被二次解析）",
+          _argv and '带引号 " 和 %PATH% 和 & dir' in _argv[0][0][-1],
+          repr(_argv[0][0][-1][:40] if _argv else None))
+
+    # ---- 缩略图：地址、后缀、动态封面位置 ----
+    check("thumb_url 会缀上缩放参数",
+          live_notify.thumb_url("http://i0.hdslb.com/x.jpg", 200, 112)
+          == "http://i0.hdslb.com/x.jpg@200w_112h_1c.webp")
+    check("thumb_url 不叠第二次（叠了 CDN 会 404）",
+          live_notify.thumb_url("http://i0.hdslb.com/x.jpg@100w.jpg", 200, 112)
+          == "http://i0.hdslb.com/x.jpg@100w.jpg")
+    check("thumb_url 空地址给空串", live_notify.thumb_url("", 200, 112) == "")
+    # 封面位置是照着**真响应**写的（实测三种类型各一条）
+    check("动态封面：图文用 opus.pics[0]",
+          bili._dyn_cover({"modules": {"module_dynamic": {"major": {
+              "type": "MAJOR_TYPE_OPUS",
+              "opus": {"pics": [{"url": "http://x/1.jpg"}, {"url": "http://x/2.jpg"}]}}}}})
+          == "http://x/1.jpg")
+    check("动态封面：投稿用 archive.cover",
+          bili._dyn_cover({"modules": {"module_dynamic": {"major": {
+              "type": "MAJOR_TYPE_ARCHIVE",
+              "archive": {"cover": "http://x/a.jpg"}}}}}) == "http://x/a.jpg")
+    check("动态封面：转发去 orig 里找",
+          bili._dyn_cover({"type": "DYNAMIC_TYPE_FORWARD",
+                           "modules": {"module_dynamic": {"major": {"type": None}}},
+                           "orig": {"modules": {"module_dynamic": {"major": {
+                               "type": "MAJOR_TYPE_ARCHIVE",
+                               "archive": {"cover": "http://x/o.jpg"}}}}}})
+          == "http://x/o.jpg")
+    check("动态封面：都没有就空串",
+          bili._dyn_cover({"modules": {}}) == "")
+    # 图片段真的进了消息
+    _segs = live_notify.build_message({"at_all": False, "at_list": []},
+                                      "文字", image="http://x/y.jpg")
+    check("build_message 把图片放在文字后面",
+          [s["type"] for s in _segs] == ["text", "image"], repr(_segs))
+
     # ---- 扫码登录的状态机（假 fetch，不联网）----
     import email.message
 
@@ -1747,6 +1952,21 @@ def run_widget_presence_tests(path):
             # 动态的开关在界面上，凭据不在（跟控制端口 token 一个口径）。
             # 所以"勾了动态却没凭据"必须当场拦下 —— 不拦就是：用户看着一切
             # 正常，实际 load_config 把动态归一成关闭，一条都不发。
+            app.var_chat_cool.set("15")
+            app.var_chat_on.set(False)
+            _chat_err = app._ui_to_cfg()
+            check("群聊冷却能写进配置",
+                  not _chat_err and app.cfg["chat"]["cooldown_seconds"] == 15,
+                  repr((_chat_err, (app.cfg.get("chat") or {}).get("cooldown_seconds"))))
+            check("群聊卡上的「试一句」按钮在", hasattr(app, "lbl_chat_test"))
+
+            app.var_sub_cover.set(False)
+            _cov_err = app._ui_to_cfg()
+            check("缩略图开关能关掉并写进配置",
+                  not _cov_err and app.cfg["subscribe"].get("cover") is False,
+                  repr(app.cfg["subscribe"].get("cover")))
+            app.var_sub_cover.set(True)
+            app._ui_to_cfg()
             check("设置页有新动态文案框",
                   bool(app.txt_dyn.get("1.0", "end-1c").strip()))
             app.cfg.setdefault("subscribe", {})["sessdata"] = ""
