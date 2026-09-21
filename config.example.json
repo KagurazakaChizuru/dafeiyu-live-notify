@@ -87,6 +87,7 @@
     "local_model": "qwen2.5:3b",
     "local_key": "",
     "ack": true,
+    "ack_text": "（让我想想喵…）",
     "keep_alive": "30m",
     "max_tokens": 160,
     "num_ctx": 2048,

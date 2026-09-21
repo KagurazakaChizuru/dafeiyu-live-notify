@@ -910,6 +910,9 @@ def load_config(path):
         # 先应一声再想（观感）；本地模型常驻内存（免得每次重新加载）；
         # 回复生成上限（生成时间几乎正比于它）
         "ack": _as_bool(chat.get("ack", True), True),
+        # 文案单独一个键。**别再和开关合并** —— 合并过一次，布尔被 str() 发了出去。
+        "ack_text": str(chat.get("ack_text") or groupchat.ACK_TEXT
+                        if groupchat is not None else "（让我想想喵…）"),
         "keep_alive": str(chat.get("keep_alive") or "30m"),
         "max_tokens": max(32, int(_as_num(chat.get("max_tokens"), 160,
                                           "chat.max_tokens"))),

@@ -1165,6 +1165,26 @@ def run_bili_tests(path):
           and not _fb2.sent,
           repr((_bot2.state, _fb2.sent)))
 
+    # "先应一声"发出去的是**那句话**，不是布尔的字面量。
+    # 实测踩过：配置里 ack=True（布尔）被 str() 成字符串 "True" 发进了群，
+    # 群友看到的就是「@某某 True」。开关和文案本来就是两件事。
+    _fb6 = FakeBot({222: []})
+    # backend 指定成 dsh，才会走注入的假 runner；默认是 local（会真去连 Ollama）
+    _b6 = gc.ChatBot({"enabled": True, "groups": [222], "ack": True,
+                      "backend": "dsh", "cooldown_seconds": 0}, _fb6,
+                     state={"groups": {}, "reminders": []},
+                     runner=lambda p: "答")
+    _b6._ask(222, "20003", "在吗")
+    import time as _time2
+    for _ in range(60):
+        if len(_fb6.sent) >= 2:
+            break
+        _time2.sleep(0.05)
+    _texts = [s["message"][-1]["data"]["text"] for s in _fb6.sent]
+    check("应一声发的是那句话，不是 'True'",
+          _texts and _texts[0] != "True" and "想想" in _texts[0], repr(_texts))
+    check("答案也发出去了", len(_texts) >= 2 and _texts[1] == "答", repr(_texts))
+
     # 到点要发出来
     _fb3 = FakeBot({111: []})
     _b3 = gc.ChatBot({"enabled": True, "groups": [111]}, _fb3, state={
