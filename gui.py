@@ -5056,9 +5056,11 @@ class App:
 
         ttk.Button(row, text="收进托盘继续跑", width=16,
                    command=hide).pack(side="left")
+        # **别在这里探测样式名。** 为了给这个按钮挑个红色样式，我写过
+        # `self.root.tk.call("ttk::style", "names")` —— 它抛
+        # `TclError: bad command "names"`，把"关闭"这条路整个炸掉。
+        # 一个纯装饰的念头不该有这种权力，所以就用最普通的按钮。
         ttk.Button(row, text="完全退出", width=12,
-                   style="Danger.TButton" if "Danger.TButton" in
-                   self.root.tk.call("ttk::style", "names") else "TButton",
                    command=quit_all).pack(side="left", padx=8)
         ttk.Button(row, text="取消", width=8,
                    command=win.destroy).pack(side="left")
