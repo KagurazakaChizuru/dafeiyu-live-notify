@@ -1,6 +1,6 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
 PackageIdentifier: KagurazakaChizuru.DafeiyuLiveNotify
-PackageVersion: 1.7.6
+PackageVersion: 1.8.0
 PackageLocale: zh-CN
 Publisher: KagurazakaChizuru
 PublisherUrl: https://github.com/KagurazakaChizuru
@@ -19,6 +19,8 @@ Description: |-
   · 下播提示带本次直播时长和人气峰值
   · 直播间轮询 / OBS 推流事件 / 全局快捷键三种触发
   · 独立 QQ 副本双实例共存，不占用你自己的 QQ
+  · 订阅 B站 UP 主：新视频 / 新动态带缩略图提醒，界面里扫码登录，不用抄 cookie
+  · 群里 @ 机器人可以聊天、可以定提醒（默认走本机小模型，不花 token）
   · 绿色免安装，零第三方依赖
 
   注意：本包不含 NapCat 和 QQ 本体。装好后还需要按使用文档把 NapCat 放到
