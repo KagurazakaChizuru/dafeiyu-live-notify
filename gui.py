@@ -29,6 +29,10 @@ import traceback
 import urllib.request
 from datetime import datetime
 
+import ctypes
+import tempfile
+from ctypes import wintypes
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 from tkinter import font as tkfont
@@ -626,6 +630,109 @@ def mix(c1, c2, t):
     b = tuple(int(c2[i:i + 2], 16) for i in (1, 3, 5))
     return "#{:02x}{:02x}{:02x}".format(
         *[int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3)])
+
+
+class _BMIH(ctypes.Structure):
+    """BITMAPINFOHEADER。只想用它的前 40 字节，字段照规格抄。"""
+    _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
+                ("biHeight", wintypes.LONG), ("biPlanes", wintypes.WORD),
+                ("biBitCount", wintypes.WORD),
+                ("biCompression", wintypes.DWORD),
+                ("biSizeImage", wintypes.DWORD),
+                ("biXPelsPerMeter", wintypes.LONG),
+                ("biYPelsPerMeter", wintypes.LONG),
+                ("biClrUsed", wintypes.DWORD),
+                ("biClrImportant", wintypes.DWORD)]
+
+
+class _BMI(ctypes.Structure):
+    _fields_ = [("bmiHeader", _BMIH), ("bmiColors", wintypes.DWORD * 3)]
+
+
+def _swap_rb(data):
+    """R 与 B 对调。切片赋值走 C，17 万像素也是瞬间。"""
+    out = bytearray(len(data))
+    out[0::3] = data[2::3]
+    out[1::3] = data[1::3]
+    out[2::3] = data[0::3]
+    return bytes(out)
+
+
+def _ppm_rgb(raw):
+    """极简 P6 解析：只认我们自己刚写出来的那种文件。"""
+    if not raw.startswith(b"P6"):
+        raise ValueError("不是 P6")
+    parts, pos = [], 2
+    while len(parts) < 3:
+        while pos < len(raw) and raw[pos:pos + 1].isspace():
+            pos += 1
+        if raw[pos:pos + 1] == b"#":
+            while pos < len(raw) and raw[pos:pos + 1] != b"\n":
+                pos += 1
+            continue
+        start = pos
+        while pos < len(raw) and not raw[pos:pos + 1].isspace():
+            pos += 1
+        parts.append(int(raw[start:pos]))
+    pos += 1
+    w, h, _max = parts
+    return w, h, raw[pos:pos + w * h * 3]
+
+
+def _dib(gdi32, w, h, pixels=None):
+    """建一个 24 位、自上而下的 DIB。返回 (句柄, 位地址, 行距)。"""
+    bmi = _BMI()
+    bmi.bmiHeader.biSize = ctypes.sizeof(_BMIH)
+    bmi.bmiHeader.biWidth = w
+    bmi.bmiHeader.biHeight = -h          # 负数 = 自上而下，省得再翻
+    bmi.bmiHeader.biPlanes = 1
+    bmi.bmiHeader.biBitCount = 24
+    bmi.bmiHeader.biCompression = 0      # BI_RGB
+    bits = ctypes.c_void_p()
+    hbmp = gdi32.CreateDIBSection(None, ctypes.byref(bmi), 0,
+                                  ctypes.byref(bits), None, 0)
+    if not hbmp:
+        raise OSError("CreateDIBSection 失败")
+    stride = (w * 3 + 3) & ~3            # 24 位 DIB 每行按 4 字节对齐
+    if pixels is not None:
+        for y in range(h):
+            ctypes.memmove(bits.value + y * stride,
+                           pixels[y * w * 3:(y + 1) * w * 3], w * 3)
+    return hbmp, bits, stride
+
+
+def gdi_stretch(bgr, sw, sh, dw, dh):
+    """把 BGR 像素拉伸成 dw×dh（HALFTONE 质量），返回 BGR。
+
+    传进来/交出去的都按 **BGR**：24 位 DIB 的内存布局就是这个，调用方负责
+    转进转出。别在中间偷偷换 —— 靠两次错误抵消的写法看着像对的，改一处就崩
+    （实测颜色反过一次，蓝头发变金褐色）。
+    """
+    gdi32 = ctypes.windll.gdi32
+    hsrc, _sbits, _sstride = _dib(gdi32, sw, sh, bgr)
+    hdst, dbits, dstride = _dib(gdi32, dw, dh)
+    hdc_s = gdi32.CreateCompatibleDC(None)
+    hdc_d = gdi32.CreateCompatibleDC(None)
+    try:
+        old_s = gdi32.SelectObject(hdc_s, hsrc)
+        old_d = gdi32.SelectObject(hdc_d, hdst)
+        gdi32.SetStretchBltMode(hdc_d, 4)            # HALFTONE
+        gdi32.SetBrushOrgEx(hdc_d, 0, 0, None)
+        if not gdi32.StretchBlt(hdc_d, 0, 0, dw, dh, hdc_s, 0, 0, sw, sh,
+                                0x00CC0020):          # SRCCOPY
+            raise OSError("StretchBlt 失败")
+        raw = ctypes.string_at(dbits.value, dstride * dh)
+        gdi32.SelectObject(hdc_s, old_s)
+        gdi32.SelectObject(hdc_d, old_d)
+    finally:
+        for h in (hdc_s, hdc_d):
+            gdi32.DeleteDC(h)
+        for h in (hsrc, hdst):
+            gdi32.DeleteObject(h)
+    out = bytearray(dw * dh * 3)
+    for y in range(dh):                               # 去掉行末的对齐填充
+        out[y * dw * 3:(y + 1) * dw * 3] = raw[y * dstride:y * dstride + dw * 3]
+    return bytes(out)
 
 
 def paint_gradient(canvas, width, height, c1, c2, tag="bg"):
@@ -1926,6 +2033,71 @@ class App:
         dlg.bind("<Escape>", lambda e: dlg.destroy())
         dlg.focus_set()
 
+    def _header_source(self):
+        """头图像素（RGB，无行距）。走 Tk 的 PPM 导出。
+
+        为什么不用 `PhotoImage.get`：那是**逐像素一次 Tcl 调用**，780×138 就是
+        十万次。导出成 PPM 再解析是 C 侧一把过，实测几毫秒。
+        """
+        if getattr(self, "_src_pixels", None) is not None:
+            return self._src_pixels
+        img = getattr(self, "_header_img", None)
+        if img is None:
+            self._src_pixels = ()
+            return ()
+        path = os.path.join(tempfile.gettempdir(), "dafeiyu-hdr.ppm")
+        try:
+            img.write(path, format="ppm")
+            with open(path, "rb") as fh:
+                raw = fh.read()
+        except Exception:
+            self._src_pixels = ()
+            return ()
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+        try:
+            self._src_pixels = _ppm_rgb(raw)
+        except Exception:
+            self._src_pixels = ()
+        return self._src_pixels
+
+    def _header_cover(self, w, h):
+        """把当前主题的头图等比缩到**刚好盖住** w×h（贴的时候居中裁切）。
+
+        动的是 GDI，不是 Python 循环：纯 Python 双线性对 17 万像素要一两秒，
+        拖窗口会卡成幻灯片；GDI HALFTONE 实测 3 毫秒。
+        拿不到缩放结果就返回 None —— 调用方退回"原尺寸 + 右缘补色"，
+        宁可难看一点，也不能让头图整个不见了。
+        """
+        img = getattr(self, "_header_img", None)
+        if img is None or w < 8 or h < 8:
+            return None
+        key = (int(w), int(h))
+        cache = getattr(self, "_cover_cache", None)
+        if cache is None:
+            cache = self._cover_cache = {}
+        if key in cache:
+            return cache[key]
+        sw, sh, rgb = self._header_source()
+        photo = None
+        if rgb:
+            k = max(w / float(sw), h / float(sh))
+            dw, dh = max(1, int(round(sw * k))), max(1, int(round(sh * k)))
+            try:
+                got = gdi_stretch(_swap_rb(rgb), sw, sh, dw, dh)
+                photo = tk.PhotoImage(
+                    data=b"P6\n%d %d\n255\n" % (dw, dh) + _swap_rb(got),
+                    format="ppm")
+            except Exception:
+                photo = None
+        if len(cache) >= 3:
+            cache.clear()
+        cache[key] = photo
+        return photo
+
     def _bg_under(self, x, y, w, h):
         """头部某一点下面的底色是什么。
 
@@ -1941,14 +2113,17 @@ class App:
             except (TypeError, ValueError, IndexError):
                 return None
 
-        if self._header_img is not None:
+        # 取**此刻真正贴在头部的**那张图（窗口宽时是缩放过的），
+        # 并且把贴图偏移补回去 —— 不然主题按钮那块底色会跟背后差一点，
+        # 于是浮出一个方块（1.7.x 踩过）。
+        shown, off_x, off_y = getattr(self, "_head_shown", (None, 0, 0))
+        if shown is not None:
             try:
-                ix, iy = int(x), int(y)
-                if 0 <= ix < self._header_img.width() and \
-                        0 <= iy < self._header_img.height():
+                ix, iy = int(x) + off_x, int(y) + off_y
+                if 0 <= ix < shown.width() and 0 <= iy < shown.height():
                     # Tk 的 PhotoImage.get 对 RGB 图返回 (r,g,b)，对调色板图返回
                     # 颜色名。两种都兜住。
-                    got = fmt(self._header_img.get(ix, iy))
+                    got = fmt(shown.get(ix, iy))
                     if got:
                         return got
             except Exception:
@@ -1974,9 +2149,16 @@ class App:
         # _paint_header 是之后才跑的 —— 这时新建的图会跑到所有东西**上面**，
         # 把头部的字全糊掉。所以画完必须把它压回渐变正上方。
         self.head.delete("hdrpic")
-        if self._header_img is not None:
-            self.head.create_image(0, 0, anchor="nw",
-                                   image=self._header_img, tags="hdrpic")
+        img, off_x, off_y = self._header_img, 0, 0
+        cover = self._header_cover(w, h)
+        if cover is not None:
+            img = cover
+            off_x = max(0, (img.width() - w) // 2)
+            off_y = max(0, (img.height() - h) // 2)
+        self._head_shown = (img, off_x, off_y)
+        if img is not None:
+            self.head.create_image(-off_x, -off_y, anchor="nw",
+                                   image=img, tags="hdrpic")
             self.head.tag_raise("hdrpic", "bg")
         self.head.delete("hair")
         self.head.create_line(0, h - 1, w, h - 1, fill=BORDER, tags="hair")
@@ -3517,7 +3699,7 @@ class App:
     def save_config_clicked(self):
         err = self._ui_to_cfg()
         if err:
-            messagebox.showerror("填写有误", err)
+            self._report_sub_error(err)
             return
         err = self._write_config()
         if err:
@@ -3586,7 +3768,7 @@ class App:
         if self.cfg is not None:
             _sub_err = self._sub_switch_error()
             if _sub_err:
-                messagebox.showerror("还差一步", _sub_err)
+                self._report_sub_error(_sub_err)
                 return False
             sub = self.cfg.setdefault("subscribe", {})
             sub["enabled"] = bool(self.var_sub_on.get())
@@ -3608,14 +3790,32 @@ class App:
         if self.var_sub_on.get() and not (sub.get("ups") or []):
             return ("勾了「UP 主发新视频时通知」，但一个 UP 主都没加。\n\n"
                     "先在下面的名单里把 UID 加进去。")
-        if self.var_sub_dyn.get() and not str(sub.get("sessdata") or "").strip():
-            return ("勾了「也通知动态」，但配置里没有登录态。\n\n"
-                    "动态接口匿名读不到（实测，B站官方号也一样），得先填 "
-                    "subscribe.sessdata。\n"
-                    "怎么拿：浏览器登录 B站 → F12 → Application → Cookies → "
-                    "bilibili.com → 复制 SESSDATA 的值。\n"
-                    "填进这个文件（先关掉本程序再改）：\n{}".format(CONFIG_PATH))
+        if self._sub_need_login():
+            # 这里**不要再教用户去 F12 抄 cookie**：同一个卡片上就有扫码按钮。
+            # 实测这行提示过过一次时 —— 界面已经有了扫码登录，提示还在教抄 cookie，
+            # 用户照着做只会更糊。
+            return ("勾了「也通知动态」，但还没登录 B站。\n\n"
+                    "动态接口匿名读不到（实测，B站官方号也一样），"
+                    "点上面的「登录 B站（扫码）」扫一下就行，不用抄 cookie。")
         return None
+
+    def _sub_need_login(self):
+        """勾了动态、却没有登录态 —— 唯一那种"该去登录"的错误。"""
+        sub = (self.cfg or {}).get("subscribe") or {}
+        return bool(self.var_sub_dyn.get()) and not str(
+            sub.get("sessdata") or "").strip()
+
+    def _report_sub_error(self, err):
+        """把订阅卡的错误说清楚；如果是"还没登录"，**顺手把扫码窗口打开**。
+
+        光弹一句"没有登录态"等于把活儿丢回给用户 —— 他刚点的那个保存按钮
+        旁边就有登录入口，直接送过去。
+        """
+        if self._sub_need_login():
+            if messagebox.askyesno("要先登录 B站", str(err) + "\n\n现在打开扫码登录？"):
+                self.login_bili()
+                return
+        messagebox.showerror("填写有误", str(err))
 
     def _refresh_sub_login(self):
         """把"登录了没"写在那行小字上 —— 用户看不见凭据，只能看见这个。"""
@@ -3628,15 +3828,24 @@ class App:
             foreground=OK_COLOR if sess else MUTED)
 
     def _save_sessdata(self, sess):
-        """把登录态写进配置。**只动这一个键。**"""
+        """把登录态写进配置。**只动订阅这几个键。**"""
         if self.cfg is None:
             return
-        self.cfg.setdefault("subscribe", {})["sessdata"] = sess
+        sub = self.cfg.setdefault("subscribe", {})
+        sub["sessdata"] = sess
+        # 登录前那次保存是被"还没有登录态"拦下的，所以这里顺手把卡上的开关
+        # 落实 —— 不然用户扫完码还得再点一次保存，而他刚才就是想开这个。
+        if self.var_sub_on.get():
+            sub["enabled"] = True
+        if self.var_sub_dyn.get():
+            sub["dynamics"] = True
         err = self._write_config()
         if err:
             messagebox.showerror("登录态没存上", err)
             return
         self._refresh_sub_login()
+        if hasattr(self, "lbl_saved"):
+            self.lbl_saved.config(text="✔ 已登录，设置也存好了")
         core.log("B站登录态已保存。勾上「也通知动态」就能用了。")
 
     def login_bili(self):

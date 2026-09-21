@@ -1728,8 +1728,8 @@ def run_widget_presence_tests(path):
             app.cfg.setdefault("subscribe", {})["sessdata"] = ""
             app.var_sub_dyn.set(True)
             dyn_err = app._ui_to_cfg()
-            check("勾了动态却没凭据：保存当场拦下，并说清去哪儿填",
-                  bool(dyn_err) and "登录态" in str(dyn_err), str(dyn_err))
+            check("勾了动态却没登录：保存当场拦下，并指向扫码按钮",
+                  bool(dyn_err) and "登录 B站（扫码）" in str(dyn_err), str(dyn_err))
             # 要把两类都预览出来，开关和名单都得齐（预览按"开着的类"列）
             app.cfg["subscribe"]["ups"] = [
                 {"mid": 12345, "enabled": True, "note": "测试"}]
@@ -1761,6 +1761,29 @@ def run_widget_presence_tests(path):
                   (_on_disk.get("subscribe") or {}).get("enabled") is True,
                   repr((_on_disk.get("subscribe") or {}).get("enabled")))
 
+            # 头图自适应：窗口比原图宽时必须**缩放**（不是留空档、也不是补条色带）。
+            if app._header_img is not None:
+                _cover = app._header_cover(984, 138)
+                check("头图能按窗口尺寸缩放（cover，盖满 984×138）",
+                      _cover is not None and _cover.width() >= 984
+                      and _cover.height() >= 138,
+                      repr(None if _cover is None else
+                           (_cover.width(), _cover.height())))
+                check("缩放后不是原来那张定尺图",
+                      _cover is not app._header_img)
+                # 缩放必须走 GDI：纯 Python 逐像素要一两秒，拖窗口会卡成幻灯片。
+                # 这条断言就是防"哪天有人改成 Python 循环"。
+                import time as _t
+                app._cover_cache.clear()
+                _t0 = _t.time()
+                app._header_cover(1400, 138)
+                _cost = _t.time() - _t0
+                check("缩放是毫秒级的（不是 Python 逐像素）",
+                      _cost < 0.5, "{:.2f} 秒".format(_cost))
+                _wide = app._bg_under(984 - 5, 60, 984, 138)
+                check("主题按钮底色取的是此刻贴的那张图",
+                      isinstance(_wide, str) and _wide.startswith("#"), repr(_wide))
+
             # 登录按钮点下去会建窗口、生成二维码 —— 这条路也真的走一遍。
             # 把 QrLogin 换成一个假的（不联网），二维码本身是真的 qr.py 画的。
             class _FakeQrLogin:
@@ -1791,6 +1814,34 @@ def run_widget_presence_tests(path):
                       "{}: {}".format(type(exc).__name__, exc))
             finally:
                 gui.core.bili.QrLogin = _real_login
+
+            # 勾了动态却没登录：保存时不该只丢一句"没有登录态"就完事 ——
+            # 它应该问一句"现在去登录吗"，答是就把扫码窗口开出来。
+            # **把 login_bili 换成记账的**：NoDialogs 里 askyesno 返回 True，
+            # 真跑下去会去发真实请求（自检不联网这条纪律不能破）。
+            _real_login_btn = app.login_bili
+            _opened = []
+            app.login_bili = lambda: _opened.append("login")
+            try:
+                app.cfg["subscribe"]["sessdata"] = ""
+                app.var_sub_on.set(True)
+                app.var_sub_dyn.set(True)
+                app.cfg["subscribe"]["ups"] = [
+                    {"mid": 12345, "enabled": True, "note": "测试"}]
+                quiet = NoDialogs()
+                with quiet:
+                    app.save_config_clicked()
+                asked = [c for c in quiet.calls if c[0] == "askyesno"]
+                check("勾了动态没登录：保存时会问一句「现在去登录吗」",
+                      bool(asked), repr(quiet.calls))
+                check("答是就直接把扫码登录打开（不教用户去 F12 抄 cookie）",
+                      _opened == ["login"], repr(_opened))
+                _text = str(asked[0][1]) if asked else ""
+                check("提示里不再教 F12 抄 cookie",
+                      "F12" not in _text and "登录 B站（扫码）" in _text,
+                      _text[:80])
+            finally:
+                app.login_bili = _real_login_btn
 
             # 真的把每个文案库窗口开一次再关掉。
             # 这一条才是抓得住 2026-09-21 那个崩溃的：静态扫描看的是写法，
