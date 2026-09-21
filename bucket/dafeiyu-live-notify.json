@@ -1,0 +1,27 @@
+{
+    "version": "1.8.0",
+    "description": "开播自动往 QQ 群发 @全体成员 通知，并自动识别当前在玩什么游戏",
+    "homepage": "https://github.com/KagurazakaChizuru/dafeiyu-live-notify",
+    "license": "MIT",
+    "url": "https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/download/v1.8.0/dafeiyu-live-notify-v1.8.0.zip",
+    "hash": "D1D5BF55730C257FA887CBC9EF62DE6C26154481A6D130B2EBEB8D1D25FFEE92",
+    "extract_dir": "dafeiyu-live-notify",
+    "bin": [
+        [
+            "大肥鱼直播姬.exe",
+            "dafeiyu"
+        ]
+    ],
+    "shortcuts": [
+        [
+            "大肥鱼直播姬.exe",
+            "大肥鱼直播姬"
+        ]
+    ],
+    "checkver": {
+        "github": "https://github.com/KagurazakaChizuru/dafeiyu-live-notify"
+    },
+    "autoupdate": {
+        "url": "https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/download/v$version/dafeiyu-live-notify-v$version.zip"
+    }
+}
