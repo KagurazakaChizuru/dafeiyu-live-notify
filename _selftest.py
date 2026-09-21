@@ -1249,8 +1249,15 @@ def run_bili_tests(path):
           "get_group_msg_history" in _fb5.calls, repr(_fb5.calls))
 
     # 调 dsh 的那条命令：**不许有 shell**
+    #
+    # **这条不能依赖机器上真的装着 dsh。** 踩过：CI 上没有 node/dsh，_run_dsh
+    # 在"找 dsh"那一步就抛 RuntimeError，整份自检 exit 1 —— 而这台机器装着
+    # dsh，本地一路全绿，于是 CI 连红六个提交没人发现。
+    # 现在把 find_dsh 换成假的：测的是**怎么调**（argv 形状、有没有 shell），
+    # 不是"这台机器上有没有装"。这样本地和 CI 跑的是同一条断言。
     _argv = []
     _real_run = gc.subprocess.run
+    _real_find = gc.find_dsh
 
     def _spy(argv, **kw):
         _argv.append((argv, kw))
@@ -1261,11 +1268,13 @@ def run_bili_tests(path):
         return R()
 
     gc.subprocess.run = _spy
+    gc.find_dsh = lambda *a, **k: (r"C:\fake\node.exe", r"C:\fake\bin.js")
     try:
         _b4 = gc.ChatBot({"dsh_profile": "groupchat"}, None)
         _b4._run_dsh('带引号 " 和 %PATH% 和 & dir')
     finally:
         gc.subprocess.run = _real_run
+        gc.find_dsh = _real_find
     check("问 DSH 走的是 node + bin.js，**不经过 shell**",
           _argv and _argv[0][0][0].lower().endswith("node.exe")
           and not _argv[0][1].get("shell"),
