@@ -43,6 +43,9 @@ WM_CONTEXTMENU = 0x007B
 
 NIM_ADD, NIM_MODIFY, NIM_DELETE = 0, 1, 2
 NIF_MESSAGE, NIF_ICON, NIF_TIP = 0x01, 0x02, 0x04
+#: 气泡提示。收进托盘之后窗口就没了，这是唯一还能跟用户说话的地方 ——
+#: 用它说一句"已收进托盘，还在盯着开播"，省得用户以为程序退了。
+NIF_INFO = 0x10
 
 IMAGE_ICON = 1
 LR_LOADFROMFILE, LR_DEFAULTSIZE = 0x0010, 0x0040
@@ -200,6 +203,16 @@ class TrayIcon(object):
         self._thread.start()
         self._ready.wait(timeout)
         return self.ok
+
+    def say(self, title, text):
+        """弹一个托盘气泡。失败就算了 —— 提示而已，不该影响主流程。"""
+        try:
+            self._nid.uFlags = NIF_INFO
+            self._nid.szInfoTitle = str(title)[:63]
+            self._nid.szInfo = str(text)[:255]
+            shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(self._nid))
+        except Exception:
+            pass
 
     def stop(self):
         """移除图标。程序退出前调，否则图标会一直挂在那儿直到鼠标划过。"""

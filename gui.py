@@ -5011,14 +5011,9 @@ class App:
         用户找不到退出的路；中间简化成直接收托盘，现在按她的要求做回来。
         **不弹是/否那种按钮** —— "是"到底指哪个，每次都得想一下。
         """
-        if self.state != STATE_RUNNING and not port_open(3000):
-            # 本来就没在跑，没什么可问的，收起来就是
-            if self._tray is not None:
-                self.hide_window()
-            else:
-                self._teardown_and_destroy()
-            return
-
+        # **永远问，不搞"没在跑就直接收起来"那种捷径** ——
+        # 加过一次，结果平时点 X 窗口直接消失、什么反馈都没有，
+        # 用户要的"问一句"等于被绕过去了（她报的"关闭按钮的反馈没处理好"）。
         win = tk.Toplevel(self.root)
         win.title("要退出吗？")
         win.configure(background=BG)
@@ -5027,8 +5022,8 @@ class App:
         tk.Label(win, text="监控还在运行", background=BG, foreground=TEXT,
                  font=(FONT, 11, "bold"), anchor="w").pack(
                      fill="x", padx=18, pady=(16, 4))
-        tk.Label(win, text="收进托盘 = 界面关掉，通知器继续跑（群里照常收得到）\n"
-                           "完全退出 = 连通知器一起停掉，开播就没有通知了",
+        tk.Label(win, text="收进托盘 = 界面关掉，它继续跑\n"
+                           "完全退出 = 一起停掉，开播就没有通知了",
                  background=BG, foreground=MUTED, font=(FONT, 9),
                  justify="left", anchor="w").pack(fill="x", padx=18)
         row = tk.Frame(win, background=BG)
@@ -5038,6 +5033,13 @@ class App:
             win.destroy()
             if self._tray is not None:
                 self.hide_window()
+                # 窗口一消失就什么反馈都没有了。日志写在"运行日志"页里，
+                # 而那一页此刻已经看不见了 —— 用托盘气泡说一句。
+                try:
+                    self._tray.say("大肥鱼直播姬",
+                                   "已收进托盘，还在盯着开播。右键图标可以退出。")
+                except Exception:
+                    pass
             else:
                 core.log("没有托盘图标，界面关掉后通知器仍在后台跑；"
                          "要停请用 app\\退出全部.bat。", "WARN")
