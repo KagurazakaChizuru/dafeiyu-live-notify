@@ -364,6 +364,11 @@ class ChatBot(object):
         if time.time() - last < cool:
             return                       # 同一个人问太勤，这次不理
         self._pending[key] = time.time()
+        # **先应一声再想。** 模型再快也要一两秒才有答案（DSH 更要十几秒），
+        # 群里最难受的是"发了没动静"。这句是给观感的，不是给内容的。
+        ack = str(self.cfg.get("ack") or "（让我想想喵…）")
+        if self.cfg.get("ack", True) and ack:
+            self._send(gid, user, ack)
         # **后台线程去问** —— 一次要十几秒，卡在主循环里直播状态就不刷了
         t = threading.Thread(target=self._ask_worker,
                              args=(gid, user, text), daemon=True,
@@ -419,7 +424,13 @@ class ChatBot(object):
                          {"role": "user", "content": str(prompt)}],
             "stream": False,
             "temperature": 0.8,
-            "max_tokens": 220,
+            # 群聊回复本来就短。**上限给小**：生成时间几乎正比于它，
+            # 而且模型话多的时候更容易绕。
+            "max_tokens": int(self.cfg.get("max_tokens") or 160),
+            # 让模型常驻内存。Ollama 默认闲置 5 分钟就卸掉，于是"偶尔来一句"
+            # 每次都在付加载权重的钱（1.5B 约 1~2 秒，大一点更久）。
+            "keep_alive": str(self.cfg.get("keep_alive") or "30m"),
+            "options": {"num_ctx": int(self.cfg.get("num_ctx") or 2048)},
         }).encode("utf-8")
         req = urllib.request.Request(url, data=body)
         req.add_header("Content-Type", "application/json")

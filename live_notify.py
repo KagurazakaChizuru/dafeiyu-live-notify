@@ -907,6 +907,14 @@ def load_config(path):
                           or "http://127.0.0.1:11434/v1/chat/completions"),
         "local_model": str(chat.get("local_model") or "qwen2.5:3b"),
         "local_key": str(chat.get("local_key") or ""),
+        # 先应一声再想（观感）；本地模型常驻内存（免得每次重新加载）；
+        # 回复生成上限（生成时间几乎正比于它）
+        "ack": _as_bool(chat.get("ack", True), True),
+        "keep_alive": str(chat.get("keep_alive") or "30m"),
+        "max_tokens": max(32, int(_as_num(chat.get("max_tokens"), 160,
+                                          "chat.max_tokens"))),
+        "num_ctx": max(512, int(_as_num(chat.get("num_ctx"), 2048,
+                                        "chat.num_ctx"))),
         # 用哪个 DSH 档案。**必须是禁掉工具的那个**，别改成 web/desktop。
         "dsh_profile": str(chat.get("dsh_profile") or "groupchat"),
         "node": str(chat.get("node") or ""),
