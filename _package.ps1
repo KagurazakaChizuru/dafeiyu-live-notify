@@ -101,7 +101,10 @@ try {
                   'qq-napcat-private', 'logs', '__pycache__', '_qqcopy_test')
     $denyFiles = @('config.json', '_account.txt', 'gui-error.log',
                    '.gitignore', '.gitattributes', '_privacy.txt')
-    $denyExt = @('.bak', '.pyc', '.exe', '.zip')
+    $denyExt = @('.bak', '.pyc', '.exe', '.zip', '.spec')
+    # .spec is PyInstaller's generated recipe - a build artefact, not a
+    # source we maintain. It landed in a release once because the build
+    # ran with --name inside the repo.
 
     $copied = 0
     foreach ($item in (Get-ChildItem -Path $root -Force)) {
