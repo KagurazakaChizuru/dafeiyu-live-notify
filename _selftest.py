@@ -17,6 +17,7 @@
 用法：  python _selftest.py
 """
 
+import atexit
 import gc
 import io
 import json
@@ -61,7 +62,19 @@ def make_config():
     }
     with open(TEST_CONFIG, "w", encoding="utf-8") as fh:
         json.dump(cfg, fh, ensure_ascii=False, indent=2)
+    # 崩了也要把这份配置删掉。**它会留下一条 SESSDATA 形状的字段**（订阅那组
+    # 写进去的测试值），而 _package.ps1 会按内容扫 SESSDATA 拒绝打包 ——
+    # 实测崩过两次，两份残留就让打包直接失败。atexit 连异常退出也走。
+    # 只管自己 PID 那份，所以两份自检同时跑也不会互删（1.7.6 就是这么改的）。
+    atexit.register(_remove_quiet, TEST_CONFIG)
     return TEST_CONFIG
+
+
+def _remove_quiet(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def run_engine_tests(path):
