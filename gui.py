@@ -33,6 +33,12 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from tkinter import font as tkfont
 
+try:
+    import qr as core_qr             # 二维码（纯标准库）：扫码登录要画一张码
+except ImportError:                  # 缺文件时登录按钮会说清楚，不影响别的
+    core_qr = None
+
+
 def _resolve_data_dir():
     """确定「程序数据目录」（config.json / napcat / qq-napcat / logs 所在处）。
 
@@ -2558,9 +2564,17 @@ class App:
                   indent=24, pady=(2, 4))
         check(scard, self.var_sub_dyn, "也通知动态（转发、图文、说说那种）", bold=False)
         card_hint(scard, "动态接口**匿名读不到**（实测，B站官方号也一样），"
-                         "要先在配置文件的 subscribe.sessdata 里填登录态。"
-                         "开了动态之后，投稿类动态会自动跳过，不会同一个视频报两遍。",
-                  indent=24, pady=(2, 8))
+                         "得先登录一次；开了动态之后，投稿类动态会自动跳过，"
+                         "不会同一个视频报两遍。",
+                  indent=24, pady=(2, 4))
+
+        lrow = tk.Frame(scard, background=CARD)
+        lrow.pack(fill="x", padx=(24, 0), pady=(0, 8))
+        ttk.Button(lrow, text="登录 B站（扫码）", width=18,
+                   command=self.login_bili).pack(side="left")
+        self.lbl_sub_login = tk.Label(lrow, text="", background=CARD,
+                                      foreground=MUTED, font=(FONT, 9))
+        self.lbl_sub_login.pack(side="left", padx=8)
 
         srow = tk.Frame(scard, background=CARD)
         srow.pack(fill="x", padx=(24, 0))
@@ -3319,6 +3333,7 @@ class App:
             {"templates": sc.get("dyn_templates") or [],
              "template": sc.get("dyn_template") or ""}))
         self._refresh_sub_tree()
+        self._refresh_sub_login()
 
         self._refresh_group_tree()
 
@@ -3601,6 +3616,158 @@ class App:
                     "bilibili.com → 复制 SESSDATA 的值。\n"
                     "填进这个文件（先关掉本程序再改）：\n{}".format(CONFIG_PATH))
         return None
+
+    def _refresh_sub_login(self):
+        """把"登录了没"写在那行小字上 —— 用户看不见凭据，只能看见这个。"""
+        sess = str(((self.cfg or {}).get("subscribe")
+                    or {}).get("sessdata") or "").strip()
+        if not hasattr(self, "lbl_sub_login"):
+            return
+        self.lbl_sub_login.config(
+            text="B站登录态：已保存" if sess else "B站登录态：未登录（动态要用）",
+            foreground=OK_COLOR if sess else MUTED)
+
+    def _save_sessdata(self, sess):
+        """把登录态写进配置。**只动这一个键。**"""
+        if self.cfg is None:
+            return
+        self.cfg.setdefault("subscribe", {})["sessdata"] = sess
+        err = self._write_config()
+        if err:
+            messagebox.showerror("登录态没存上", err)
+            return
+        self._refresh_sub_login()
+        core.log("B站登录态已保存。勾上「也通知动态」就能用了。")
+
+    def login_bili(self):
+        """扫码登录 B站，拿动态接口要的登录态。
+
+        为什么要做在界面里：动态接口匿名读不到，而让用户自己开 F12 抄 cookie
+        不该叫"登录"。**不去读浏览器的 cookie 库** —— 那等于从别人的加密库里
+        挖凭据，一个公开分发的工具不该长那样。
+
+        登录态只写进本机 config.json：日志里打码、界面不回显、打包产物里排除。
+        """
+        if core.bili is None:
+            messagebox.showerror("缺 bili.py", "订阅功能需要 app\\bili.py，"
+                                               "当前目录里没有。")
+            return
+        if core_qr is None:
+            messagebox.showerror("缺 qr.py", "扫码登录要画二维码，需要 app\\qr.py。")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("登录 B站（扫码）")
+        win.configure(background=BG)
+        win.geometry("360x470")
+        win.transient(self.root)
+
+        tk.Label(win, text="用手机 B站客户端扫这个码",
+                 background=BG, foreground=TEXT, font=(FONT, 11, "bold"),
+                 pady=10).pack()
+        canvas = tk.Canvas(win, width=300, height=300, background="#FFFFFF",
+                           highlightthickness=1, highlightbackground=BORDER)
+        canvas.pack()
+        lbl = tk.Label(win, text="正在生成二维码 …", background=BG,
+                       foreground=MUTED, font=(FONT, 9), wraplength=320,
+                       justify="center")
+        lbl.pack(fill="x", pady=(10, 4))
+        tk.Label(win, text="登录态只存在你自己的 config.json 里，"
+                           "不会发到任何地方。",
+                 background=BG, foreground=MUTED, font=(FONT, 8)).pack()
+
+        login = core.bili.QrLogin()
+        state = {"timer": None, "done": False}
+
+        def stop():
+            # 老坑：after_cancel 在界面重建后会报 can't delete Tcl command，
+            # 所以直接调 Tcl。
+            if state["timer"]:
+                try:
+                    self.root.tk.call("after", "cancel", state["timer"])
+                except tk.TclError:
+                    pass
+                state["timer"] = None
+
+        def draw(grid):
+            n = len(grid)
+            cell = max(1, 300 // n)
+            off = (300 - cell * n) // 2
+            canvas.delete("all")
+            for r, row in enumerate(grid):
+                for c, v in enumerate(row):
+                    if v:
+                        x, y = off + c * cell, off + r * cell
+                        canvas.create_rectangle(x, y, x + cell, y + cell,
+                                                fill="#000000", width=0)
+
+        def tick():
+            if state["done"] or not win.winfo_exists():
+                return
+
+            def work():
+                return login.poll()
+
+            def done(res):
+                if state["done"] or not win.winfo_exists():
+                    return
+                if isinstance(res, BaseException):
+                    lbl.config(text="查状态失败：{}".format(res), foreground=BAD_COLOR)
+                    state["timer"] = self.root.after(4000, tick)
+                    return
+                kind, sess = res
+                if kind == "ok":
+                    state["done"] = True
+                    stop()
+                    self._save_sessdata(sess)
+                    lbl.config(text="✔ 登录成功，登录态已保存", foreground=OK_COLOR)
+                    win.after(1200, win.destroy)
+                elif kind == "scanned":
+                    lbl.config(text="扫到了 —— 在手机上点一下「确认登录」",
+                               foreground=PRIMARY)
+                    state["timer"] = self.root.after(1500, tick)
+                elif kind == "expired":
+                    lbl.config(text="二维码过期了，点下面的「换一张」",
+                               foreground=BAD_COLOR)
+                else:
+                    state["timer"] = self.root.after(2000, tick)
+
+            self.run_async(work, done)
+
+        def refresh():
+            stop()
+            lbl.config(text="正在生成二维码 …", foreground=MUTED)
+            canvas.delete("all")
+
+            def work():
+                return login.start()
+
+            def done(res):
+                if state["done"] or not win.winfo_exists():
+                    return
+                if isinstance(res, BaseException):
+                    lbl.config(text="生成失败：{}".format(res), foreground=BAD_COLOR)
+                    return
+                draw(core_qr.encode(res, border=4))
+                lbl.config(text="等扫码 …（手机 B站 → 右上角 → 扫一扫）",
+                           foreground=TEXT)
+                state["timer"] = self.root.after(2000, tick)
+
+            self.run_async(work, done)
+
+        def close_win():
+            state["done"] = True
+            stop()
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", close_win)
+        btns = tk.Frame(win, background=BG)
+        btns.pack(pady=10)
+        ttk.Button(btns, text="换一张", width=10,
+                   command=refresh).pack(side="left", padx=6)
+        ttk.Button(btns, text="关闭", width=10,
+                   command=close_win).pack(side="left", padx=6)
+        refresh()
 
     def _refresh_sub_tree(self):
         """重画 UP 主名单。只读 self.cfg —— 增删都是先改配置再重画。"""

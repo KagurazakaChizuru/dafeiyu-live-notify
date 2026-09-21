@@ -83,6 +83,117 @@ _DM_PROBE = {
 #: 而那个码看起来像"没权限"。轮询间隔本来就有分钟级，这里只是兜底。
 _MIN_GAP = 1.5
 
+#: 扫码登录（passport，跟空间接口不是一套风控）
+QR_GENERATE = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
+QR_POLL = "https://passport.bilibili.com/x/passport-login/web/qrcode/poll"
+QR_OK = 0              # 扫完并在手机上确认了
+QR_WAIT = 86101        # 还没扫
+QR_SCANNED = 86090     # 扫了，等手机确认
+QR_EXPIRED = 86038     # 这张码过期了，得重新生成
+
+
+class QrLogin:
+    """扫码登录，拿到 SESSDATA —— 界面里那个"登录 B站"按钮用的就是它。
+
+    三步（都是 B站网页版自己在用的那套）：
+
+        start()  → passport 生成一张码，返回要编码进二维码的 url
+        （界面把 url 画成二维码给用户扫）
+        poll()   → 轮询；用户扫了、确认了，响应头里就有 Set-Cookie: SESSDATA=...
+
+    为什么值得做：动态接口匿名读不到（实测，见 `Space.dynamics`），而让用户
+    自己开 F12 抄 cookie 不该叫"登录"。
+
+    fetch 是给测试注入的（不联网也能验状态机）。签名：
+        fetch(url) -> (http_status, headers, body_text)
+    """
+
+    def __init__(self, fetch=None):
+        self._fetch = fetch or _http_get
+        self.url = ""
+        self.key = ""
+
+    def start(self):
+        """生成一张新码。返回要画进二维码的 url。"""
+        status, _hdr, body = self._fetch(QR_GENERATE)
+        try:
+            data = json.loads(body)
+        except ValueError:
+            raise BiliError("生成二维码失败：接口没回 JSON（HTTP {}）".format(status))
+        if data.get("code") != 0:
+            raise BiliError("生成二维码失败：code={} msg={}".format(
+                data.get("code"), data.get("message")))
+        info = data.get("data") or {}
+        self.url = str(info.get("url") or "")
+        self.key = str(info.get("qrcode_key") or "")
+        if not self.url or not self.key:
+            raise BiliError("生成二维码失败：接口没给 url / qrcode_key")
+        return self.url
+
+    def poll(self):
+        """问一次扫得怎么样了。
+
+        返回 (状态, sessdata)。状态是 "wait" / "scanned" / "ok" / "expired"；
+        只有 "ok" 时第二项才是登录态（一串非空字符串）。
+        """
+        if not self.key:
+            raise BiliError("还没生成二维码")
+        query = urllib.parse.urlencode({"qrcode_key": self.key,
+                                        "source": "main-fe-header"})
+        status, headers, body = self._fetch(QR_POLL + "?" + query)
+        try:
+            data = json.loads(body)
+        except ValueError:
+            raise BiliError("轮询登录状态失败：接口没回 JSON（HTTP {}）".format(status))
+        inner = data.get("data") or {}
+        code = inner.get("code")
+        if code == QR_OK:
+            sess = sessdata_from(headers)
+            if not sess:
+                # 成功却没给 cookie：多半是接口改版，明说，别让用户干等
+                raise BiliError("登录成功了，但响应里没有 SESSDATA（B站改版了？）")
+            return "ok", sess
+        if code == QR_SCANNED:
+            return "scanned", ""
+        if code == QR_EXPIRED:
+            return "expired", ""
+        return "wait", ""
+
+
+def _http_get(url):
+    """发一个 GET，把状态、响应头、正文都交出去（扫码登录要读 Set-Cookie）。"""
+    req = urllib.request.Request(url)
+    req.add_header("User-Agent", UA)
+    req.add_header("Referer", "https://www.bilibili.com/")
+    opener = _opener()
+    try:
+        with opener.open(req, timeout=20) as resp:
+            return resp.status, resp.headers, resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers, exc.read().decode("utf-8", "replace")
+    except Exception as exc:
+        raise BiliError("连不上 B站：{}".format(exc))
+
+
+def sessdata_from(headers):
+    """从响应头里把 SESSDATA 抠出来。
+
+    `headers` 可以是 email.message.Message（urllib 给的）或普通 dict ——
+    取全部 Set-Cookie 再找那一个，别假设它排第一（实测它跟在别的 cookie 后面）。
+    """
+    raw = []
+    if hasattr(headers, "get_all"):
+        raw = headers.get_all("Set-Cookie") or []
+    elif isinstance(headers, dict):
+        value = headers.get("Set-Cookie") or headers.get("set-cookie") or ""
+        raw = [value] if value else []
+    for item in raw:
+        for part in str(item).split(";"):
+            name, _sep, value = part.strip().partition("=")
+            if name == "SESSDATA" and value:
+                return value
+    return ""
+
 
 #: 拿它当"凭据还有没有效"的对照账号：B站官方号，动态不断。
 #: **别改成别的 mid** —— 这个自检成立的前提是"它一定有动态"。

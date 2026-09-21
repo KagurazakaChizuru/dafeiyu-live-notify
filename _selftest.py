@@ -981,6 +981,111 @@ def run_bili_tests(path):
           st2["ups"]["42"].get("last_created") in (None, 0)
           and st2["ups"]["42"]["last_dyn_created"] == 401, repr(st2["ups"]["42"]))
 
+    # ---- 二维码：自己写的编码器（qr.py）----
+    # 完整验证是拿参考实现逐格比出来的（688 次比对零差异），参考实现只在
+    # 开发机上、不进产品。这里钉一个 21×21 的固定向量：正则回归立刻红。
+    import qr as qr_mod
+    qr_vector = [
+        "111111100101101111111", "100000101101001000001",
+        "101110101100101011101", "101110100101001011101",
+        "101110101000101011101", "100000101001101000001",
+        "111111101010101111111", "000000001111100000000",
+        "110100110110001110110", "011111011100001000011",
+        "001101111010110001101", "000101001001000001011",
+        "000010110110101010000", "000000001111000110101",
+        "111111101110010101110", "100000100111110110000",
+        "101110100101001110001", "101110101011000101111",
+        "101110100110100010101", "100000101110011000000",
+        "111111101011100101010",
+    ]
+    got = ["".join(str(v) for v in row) for row in qr_mod.encode("hello")]
+    check("二维码：固定向量逐格一致", got == qr_vector,
+          "第 {} 行起就不一样".format(next(
+              (i for i in range(min(len(got), len(qr_vector)))
+               if got[i] != qr_vector[i]), "?")))
+
+    login_url = ("https://account.bilibili.com/h5/account-h5/auth/scan-web"
+                 "?navhide=1&qrcode_key=2b2a691c3df7fd787e101774a57445d6&from=")
+    check("二维码：B站登录那条 URL 用版本 6（41×41）",
+          qr_mod.size_of(login_url) == (6, 41), repr(qr_mod.size_of(login_url)))
+    check("二维码：版本随长度增长（"+ "1/2/3/4 字节对不上）",
+          qr_mod.size_of("a")[0] == 1 and qr_mod.size_of("x" * 108)[0] == 6,
+          repr((qr_mod.size_of("a"), qr_mod.size_of("x" * 108))))
+    try:
+        qr_mod.encode("z" * 272)
+        too_long = None
+    except ValueError as exc:
+        too_long = str(exc)
+    check("二维码：超容量明确报错，不静默出错图", bool(too_long), repr(too_long))
+    _bordered = qr_mod.encode("hello", border=2)
+    check("二维码：静区是真的留白",
+          len(_bordered) == 25
+          and all(v == 0 for v in _bordered[0])
+          and all(v == 0 for v in _bordered[-1])
+          and all(row[0] == 0 and row[-1] == 0 for row in _bordered),
+          "边长 {}".format(len(_bordered)))
+
+    # ---- 扫码登录的状态机（假 fetch，不联网）----
+    import email.message
+
+    def hdr(*cookies):
+        m = email.message.Message()
+        for c in cookies:
+            m.add_header("Set-Cookie", c)
+        return m
+
+    class FakeNet:
+        """按顺序吐预设响应，并记下请求过的 URL。"""
+
+        def __init__(self, *responses):
+            self.responses = list(responses)
+            self.urls = []
+
+        def __call__(self, url):
+            self.urls.append(url)
+            return self.responses.pop(0)
+
+    def gen_body(url="https://account.bilibili.com/x", key="KEY123"):
+        return (200, hdr(), json.dumps(
+            {"code": 0, "data": {"url": url, "qrcode_key": key}}))
+
+    def poll_body(code, cookies=()):
+        return (200, hdr(*cookies), json.dumps(
+            {"code": 0, "data": {"code": code}}))
+
+    net = FakeNet(gen_body(), poll_body(bili.QR_WAIT),
+                  poll_body(bili.QR_SCANNED),
+                  poll_body(0, ("buvid3=abc; Path=/",
+                                "SESSDATA=deadbeef%2C123456%2Cxyz; Path=/; HttpOnly")),
+                  poll_body(bili.QR_EXPIRED))
+    login = bili.QrLogin(fetch=net)
+    check("扫码登录：start() 拿到 url 和 key",
+          login.start() == "https://account.bilibili.com/x" and login.key == "KEY123")
+    check("扫码登录：未扫码 -> wait", login.poll() == ("wait", ""))
+    check("扫码登录：扫了没确认 -> scanned", login.poll() == ("scanned", ""))
+    kind, sess = login.poll()
+    check("扫码登录：确认后拿到 SESSDATA（它不在第一个 Set-Cookie 里）",
+          kind == "ok" and sess == "deadbeef%2C123456%2Cxyz", repr((kind, sess)))
+    check("扫码登录：过期 -> expired", login.poll() == ("expired", ""))
+    check("扫码登录：轮询带上了 qrcode_key",
+          "qrcode_key=KEY123" in net.urls[1], net.urls[1])
+
+    # 成功了却没给 cookie：必须报错，不能返回一个空的登录态让用户干等
+    net2 = FakeNet(gen_body(), poll_body(0))
+    lg2 = bili.QrLogin(fetch=net2)
+    lg2.start()
+    try:
+        lg2.poll()
+        silent = None
+    except bili.BiliError as exc:
+        silent = str(exc)
+    check("扫码登录：成功但没给 SESSDATA 时报错", bool(silent), repr(silent))
+
+    check("sessdata_from 认得像 dict 的响应头",
+          bili.sessdata_from({"Set-Cookie": "a=1; SESSDATA=vvv; b=2"}) == "vvv")
+    check("sessdata_from 没有就返回空串",
+          bili.sessdata_from({"Set-Cookie": "a=1"}) == "")
+
     # 监控线程捕获的是 cfg["subscribe"] 这个**引用**（cmd_watch 里
     # `subscribe_cfg = cfg["subscribe"]`），而保存配置走的是就地 update。
     # 所以勾上开关保存之后，正在跑的轮询下一轮就读到了 —— 不用重启。
@@ -1643,6 +1748,37 @@ def run_widget_presence_tests(path):
                   (_on_disk.get("subscribe") or {}).get("enabled") is True,
                   repr((_on_disk.get("subscribe") or {}).get("enabled")))
 
+            # 登录按钮点下去会建窗口、生成二维码 —— 这条路也真的走一遍。
+            # 把 QrLogin 换成一个假的（不联网），二维码本身是真的 qr.py 画的。
+            class _FakeQrLogin:
+                def __init__(self, fetch=None):
+                    self.url = "https://example.invalid/scan"
+
+                def start(self):
+                    return self.url
+
+                def poll(self):
+                    return ("wait", "")
+
+            _real_login = gui.core.bili.QrLogin
+            gui.core.bili.QrLogin = _FakeQrLogin
+            try:
+                app.login_bili()
+                for _ in range(40):                 # 等后台线程把窗口建出来
+                    root.update()
+                    time.sleep(0.05)
+                wins = [w for w in root.winfo_children()
+                        if isinstance(w, tk.Toplevel)]
+                check("扫码登录窗口打得开", bool(wins))
+                for w in wins:
+                    w.destroy()
+                root.update()
+            except Exception as exc:
+                check("扫码登录窗口打得开", False,
+                      "{}: {}".format(type(exc).__name__, exc))
+            finally:
+                gui.core.bili.QrLogin = _real_login
+
             # 真的把每个文案库窗口开一次再关掉。
             # 这一条才是抓得住 2026-09-21 那个崩溃的：静态扫描看的是写法，
             # 这里走的是用户那条路 —— 点按钮、建窗口、渲染每一行。
@@ -1762,12 +1898,16 @@ def run_main_wiring_tests():
     ):
         check(label, token in src)
 
-    # on_close 必须走托盘那条，不能直接 destroy
-    i_close = src.find("def on_close")
+    # on_close 必须走托盘那条，不能直接 destroy。
+    # 定位要写成 `(self)`：界面里还有别的局部函数叫 on_close（弹窗的关闭回调），
+    # 只写 `def on_close` 会命中那一个 —— 实测被这条误伤过一次。
+    i_close = src.find("def on_close(self)")
     if i_close > 0:
         tail = src[i_close:i_close + 1400]
         check("on_close 收进托盘而不是直接退出",
               "hide_window()" in tail and "self.root.destroy()" not in tail)
+    else:
+        check("找得到 App.on_close", False)
 
     return failures
 
