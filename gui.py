@@ -2761,7 +2761,7 @@ class App:
         self.var_sub_cover = tk.BooleanVar()
         check(scard, self.var_sub_cover, "播报带一张小封面", bold=False)
         card_hint(scard, "用 B站图床自己的缩放参数取小图（原图 250 KB → 缩略图 5 KB），"
-                         "不下载、不占带宽。尺寸跟开播封面共用「消息与设置」里那个。",
+                         "不下载、不占带宽。尺寸见配置里的 subscribe.cover_size。",
                   indent=24, pady=(2, 8))
 
         lrow = tk.Frame(scard, background=CARD)

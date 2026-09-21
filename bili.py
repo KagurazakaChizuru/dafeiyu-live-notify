@@ -513,6 +513,28 @@ def _dyn_text(item):
     """
     md = ((item.get("modules") or {}).get("module_dynamic") or {})
     text = str((md.get("desc") or {}).get("text") or "").strip()
+
+    # 转发：把能拿到的都列出来，别只发一个标题。实测 orig 里有原作者名、
+    # 时长、以及转发者自己写的那句话。
+    if str(item.get("type") or "") == "DYNAMIC_TYPE_FORWARD":
+        orig = item.get("orig") if isinstance(item.get("orig"), dict) else {}
+        omods = orig.get("modules") or {}
+        omd = omods.get("module_dynamic") or {}
+        ot = _dyn_major_title(omd) or _dyn_major_title(md)
+        author = str((omods.get("module_author") or {}).get("name") or "").strip()
+        dur = str((((omd.get("major") or {}).get("archive") or {})
+                   .get("duration_text")) or "").strip()
+        parts = []
+        if text and text not in _GENERIC_DYN_TEXT:
+            parts.append(text)
+        if ot:
+            line = "转发自 {}：{}".format(author, ot) if author else "转发自：" + ot
+            if dur:
+                line += "（{}）".format(dur)
+            parts.append(line)
+        if parts:
+            # 用 ｜ 不用换行：clip_text 会把换行压平，多行到不了群里
+            return " ｜ ".join(parts)
     # 转发：真内容在 **orig** 里，不在自己这层的 major 里。
     # 实测她的转发动态：自己这层 desc 是「分享视频」、major.type 是 None，
     # 被转发那条视频的标题在 orig.modules.module_dynamic.major.archive.title。

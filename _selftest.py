@@ -1299,6 +1299,31 @@ def run_bili_tests(path):
                                "type": "MAJOR_TYPE_ARCHIVE",
                                "archive": {"cover": "http://x/o.jpg"}}}}}})
           == "http://x/o.jpg")
+    # 转发要把详细列出来：自己的话 + 原作者 + 原标题 + 时长
+    _fwd = bili._dyn_text({
+        "type": "DYNAMIC_TYPE_FORWARD",
+        "modules": {"module_dynamic": {
+            "desc": {"text": "已爆炸，，，，"},
+            "major": {"type": None}}},
+        "orig": {"modules": {
+            "module_author": {"name": "探马-再探再报"},
+            "module_dynamic": {"major": {
+                "type": "MAJOR_TYPE_ARCHIVE",
+                "archive": {"title": "莫斯科州遭最大规模空袭",
+                            "duration_text": "04:55"}}}}}})
+    check("转发动态列出详细（自己的话 + 转发自谁 + 原标题 + 时长）",
+          _fwd == "已爆炸，，，， ｜ 转发自 探马-再探再报："
+                  "莫斯科州遭最大规模空袭（04:55）", repr(_fwd))
+    check("转发自己的话是「分享视频」时只留「转发自…」",
+          bili._dyn_text({
+              "type": "DYNAMIC_TYPE_FORWARD",
+              "modules": {"module_dynamic": {"desc": {"text": "分享视频"},
+                                             "major": {"type": None}}},
+              "orig": {"modules": {
+                  "module_author": {"name": "某人"},
+                  "module_dynamic": {"major": {
+                      "archive": {"title": "标题"}}}}}})
+          == "转发自 某人：标题")
     check("动态封面：都没有就空串",
           bili._dyn_cover({"modules": {}}) == "")
     # 图片段真的进了消息

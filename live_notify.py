@@ -851,6 +851,14 @@ def load_config(path):
             "enabled": _as_bool(item.get("enabled", True), True),
             "note": str(item.get("note") or ""),
         })
+    # 缩略图尺寸：跟开播封面同一种写法（两个数字），只是默认更大 ——
+    # 共用过 message.cover_size（200×112），群里根本看不清（她提的）。
+    _sub_cover_size = subscribe.get("cover_size") or [320, 180]
+    try:
+        _sub_cover_size = [int(_sub_cover_size[0]), int(_sub_cover_size[1])]
+    except (TypeError, ValueError, IndexError):
+        raise ConfigError("subscribe.cover_size 必须是两个数字，例如 [320, 180]")
+
     subscribe_cfg = {
         "enabled": _as_bool(subscribe.get("enabled", False), False) and bool(ups),
         # **按分钟轮询。** 实测：同一个请求短时间打十几次就会吃到 HTTP 412，
@@ -877,6 +885,7 @@ def load_config(path):
                                        TEMPLATE_POOLS["dynamic"]),
         # 带不带缩略图。默认带 —— 群里一张小图比一行字显眼得多。
         "cover": _as_bool(subscribe.get("cover", True), True),
+        "cover_size": _sub_cover_size,
         # 登录态。**不要**放进日志、不要出现在打包产物里（见 _package.ps1）。
         "sessdata": str(subscribe.get("sessdata") or ""),
     }
@@ -2558,7 +2567,7 @@ def cmd_watch(cfg, stop_event=None):
             """要带图就返回缩略图地址，否则空串。尺寸跟开播封面共用一份配置。"""
             if not subscribe_cfg.get("cover", True):
                 return ""
-            size = cfg["message"].get("cover_size") or [200, 112]
+            size = subscribe_cfg.get("cover_size") or [320, 180]
             return thumb_url(item.get("cover"), size[0], size[1])
 
         def announce(item, up_name, label, kind):

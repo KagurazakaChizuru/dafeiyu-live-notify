@@ -119,6 +119,7 @@
     "dyn_template": "💬 {up} 发了条动态\n\n{text}\n{link}",
     "dyn_templates": [],
     "cover": true,
+    "cover_size": [320, 180],
     "sessdata": "",
     "at_all": false
   },
