@@ -981,6 +981,30 @@ def run_bili_tests(path):
           st2["ups"]["42"].get("last_created") in (None, 0)
           and st2["ups"]["42"]["last_dyn_created"] == 401, repr(st2["ups"]["42"]))
 
+    # 监控线程捕获的是 cfg["subscribe"] 这个**引用**（cmd_watch 里
+    # `subscribe_cfg = cfg["subscribe"]`），而保存配置走的是就地 update。
+    # 所以勾上开关保存之后，正在跑的轮询下一轮就读到了 —— 不用重启。
+    # 这条断言钉的是这个因果关系：谁把保存改回"整块替换"，它就会红。
+    alias = {"ups": [{"mid": 42, "enabled": True, "note": ""}],
+             "dynamics": False, "at_all": False}
+    watch_view = alias                    # 模拟 cmd_watch 捕获的那个引用
+
+    def one_cycle(space):
+        """照 cmd_watch 那两行来：**开关开着才叫轮询**（闸门在调用方）。"""
+        if not watch_view.get("enabled"):
+            return
+        live_notify.poll_subscriptions(watch_view, {}, space,
+                                       lambda *a: None, quiet)
+
+    probe = CountingSpace()
+    one_cycle(probe)
+    check("开关关着时，轮询一个请求都不发", probe.asked == [], repr(probe.asked))
+    alias.update({"enabled": True})       # 模拟保存时 _ui_to_cfg 的就地 update
+    probe2 = CountingSpace()
+    one_cycle(probe2)
+    check("就地 update 之后，正在跑的轮询立刻开始查（不用重启）",
+          probe2.asked == [42], repr(probe2.asked))
+
     ds.dyn_asked = 0
     live_notify.poll_subscriptions({"ups": [{"mid": 42, "enabled": True}]},
                                    {}, ds, lambda *a: None, quiet)
@@ -1598,6 +1622,27 @@ def run_widget_presence_tests(path):
                   not dyn_err
                   and app.cfg["subscribe"]["sessdata"] == "test-sessdata-value",
                   str(dyn_err))
+            # 「添加」那条路是立刻落盘的 —— 它必须把卡上的开关一起写下去。
+            # 实测的坑：勾了开关再点添加，存下去的还是旧值，界面却显示勾着，
+            # 用户以为开了（配置里其实是关的，于是一条都不推送）。
+            app.cfg["subscribe"]["ups"] = [
+                {"mid": 12345, "enabled": True, "note": "测试"}]
+            app.var_sub_on.set(True)
+            # 动态这里保持开着：后面那条"测试窗口里出现新动态"要靠它
+            app.var_sub_dyn.set(True)
+            persisted = app._persist()
+            check("立刻落盘会把订阅开关一起写下去",
+                  persisted and app.cfg["subscribe"]["enabled"] is True
+                  and app.cfg["subscribe"]["dynamics"] is True,
+                  repr((persisted, app.cfg["subscribe"].get("enabled"),
+                        app.cfg["subscribe"].get("dynamics"))))
+            # 光看内存里的 dict 不够 —— 用户吃亏的地方正是"文件里还是旧值"，
+            # 所以直接读文件（gui.CONFIG_PATH 指向的测试配置）。
+            _on_disk = json.load(io.open(gui.CONFIG_PATH, encoding="utf-8-sig"))
+            check("落盘文件里的开关也是 true",
+                  (_on_disk.get("subscribe") or {}).get("enabled") is True,
+                  repr((_on_disk.get("subscribe") or {}).get("enabled")))
+
             # 真的把每个文案库窗口开一次再关掉。
             # 这一条才是抓得住 2026-09-21 那个崩溃的：静态扫描看的是写法，
             # 这里走的是用户那条路 —— 点按钮、建窗口、渲染每一行。

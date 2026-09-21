@@ -2595,6 +2595,18 @@ class App:
                                       foreground=MUTED, font=(FONT, 9))
         self.lbl_sub_count.pack(side="right")
 
+        # ---------------- 保存 ----------------
+        # 「保存设置」原来只在「消息与设置」页最下面，而订阅开关在这一页 ——
+        # 实测有人勾了开关找不到保存按钮，于是"开了却没推送"（2026-09-21）。
+        # 两页各给一个，按的是同一个处理。
+        tsv = tk.Frame(page, background=BG)
+        tsv.pack(fill="x", pady=(16, 0))
+        ttk.Button(tsv, text="保存设置", width=14, style="Primary.TButton",
+                   command=self.save_config_clicked).pack(side="left")
+        tk.Label(tsv, text="这一页改了也要保存（订阅开关、轮询间隔都在这一页）",
+                 background=BG, foreground=MUTED,
+                 font=(FONT, 9)).pack(side="left", padx=8)
+
         # ---------------- 下播提示 ----------------
         self.var_offline = tk.BooleanVar()
         self.var_offline_at = tk.BooleanVar()
@@ -3101,6 +3113,9 @@ class App:
         except Exception:
             pass
         self._restore_log()
+        if self.state == STATE_RUNNING:
+            core.log("配置已重载。**正在运行的监控仍按旧配置跑** —— "
+                     "要让它用上新配置，请点「停止监控」再开始。", "WARN")
 
     def _maybe_autostart(self):
         """配置里开了 auto_start 时，界面一起来就直接进监控，不用点大按钮。"""
@@ -3226,6 +3241,13 @@ class App:
     # ==================================================================
 
     def reload_config(self):
+        """放弃修改、从磁盘重读。
+
+        注意它**替换**了 self.cfg 对象，而监控线程手里攥着旧的子字典引用
+        （cfg["subscribe"] 之类）—— 所以重载之后，正在跑的监控不会自动跟上，
+        必须停一次再开始。保存设置那条路不同：它是就地 update，能实时生效。
+        这个差别不说清楚，用户只会看到"改了没用"。
+        """
         try:
             self.cfg = core.load_config(CONFIG_PATH)
         except core.ConfigError as exc:
@@ -3413,22 +3435,9 @@ class App:
             # 勾了开关却没名单，load_config 会把 enabled 归一成 false，
             # 界面却还显示勾着 —— 用户以为在订阅，其实早关了。
             sub_old = self.cfg.get("subscribe") or {}
-            if self.var_sub_on.get() and not (sub_old.get("ups") or []):
-                raise ValueError("勾了「UP 主发新视频时通知」，但一个 UP 主都没加。"
-                                 "先去「触发方式」页把 UID 加上。")
-            # 动态的开关在界面里，凭据不在（跟控制端口 token 一个口径：
-            # 凭据只留在 config.json 里，界面不回显）。所以这里必须拦一下 ——
-            # 不然用户勾了"也通知动态"、保存、看着一切正常，实际 load_config
-            # 会因为没有凭据把动态归一成关闭，一条都不会发。
-            if self.var_sub_dyn.get() and not str(
-                    sub_old.get("sessdata") or "").strip():
-                raise ValueError(
-                    "勾了「也通知动态」，但配置里没有登录态。\n\n"
-                    "动态接口匿名读不到（实测，B站官方号也一样），得先填 "
-                    "subscribe.sessdata。\n"
-                    "怎么拿：浏览器登录 B站 → F12 → Application → Cookies → "
-                    "bilibili.com → 复制 SESSDATA 的值。\n"
-                    "填进这个文件（先关掉本程序再改）：\n{}".format(CONFIG_PATH))
+            _sub_err = self._sub_switch_error()
+            if _sub_err:
+                raise ValueError(_sub_err)
 
             _sblocks = split_templates(self.txt_sub.get("1.0", "end-1c"))
             # 同 reminder/offline：就地 update。at_all 与 sessdata 界面上不暴露，
@@ -3553,12 +3562,45 @@ class App:
         return None
 
     def _persist(self):
+        """立刻落盘（加群、改订阅名单都走这条）。
+
+        **必须把订阅卡的两个开关也读进来。** 不读的话：勾上开关、再点
+        「添加」，写进文件的仍是旧的开关状态，界面却显示勾着 ——
+        用户看到的现象就是"我开了，但它不推送"（2026-09-21 实测）。
+        """
+        if self.cfg is not None:
+            _sub_err = self._sub_switch_error()
+            if _sub_err:
+                messagebox.showerror("还差一步", _sub_err)
+                return False
+            sub = self.cfg.setdefault("subscribe", {})
+            sub["enabled"] = bool(self.var_sub_on.get())
+            sub["dynamics"] = bool(self.var_sub_dyn.get())
         err = self._write_config()
         if err:
             messagebox.showerror("保存失败", err)
             return False
         self._refresh_group_tree()
         return True
+
+    def _sub_switch_error(self):
+        """订阅卡的两个坑，返回错误文案；没问题返回 None。
+
+        「保存设置」和名单的"立刻落盘"两条路共用它 —— 两条路都得拦，
+        否则勾了开关再点「添加」，落盘的仍是旧开关状态（实测过）。
+        """
+        sub = (self.cfg or {}).get("subscribe") or {}
+        if self.var_sub_on.get() and not (sub.get("ups") or []):
+            return ("勾了「UP 主发新视频时通知」，但一个 UP 主都没加。\n\n"
+                    "先在下面的名单里把 UID 加进去。")
+        if self.var_sub_dyn.get() and not str(sub.get("sessdata") or "").strip():
+            return ("勾了「也通知动态」，但配置里没有登录态。\n\n"
+                    "动态接口匿名读不到（实测，B站官方号也一样），得先填 "
+                    "subscribe.sessdata。\n"
+                    "怎么拿：浏览器登录 B站 → F12 → Application → Cookies → "
+                    "bilibili.com → 复制 SESSDATA 的值。\n"
+                    "填进这个文件（先关掉本程序再改）：\n{}".format(CONFIG_PATH))
+        return None
 
     def _refresh_sub_tree(self):
         """重画 UP 主名单。只读 self.cfg —— 增删都是先改配置再重画。"""
