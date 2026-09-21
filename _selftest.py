@@ -2207,6 +2207,47 @@ def run_widget_presence_tests(path):
                 gui.apply_theme(_theme_before)
                 app.rebuild_ui()
 
+            # 开关从"关"动画到"开"，**两套主题下都必须还在**。
+            #
+            # 踩过：弹簧过冲 → mix() 溢出 → 颜色串变成 8 位的 '#63ce104' →
+            # create_oval 抛 TclError，而异常在 Tk 回调里会被吞掉，画布刚被
+            # delete("all") 清过，就停在空白状态 —— 深色下"开"的开关整条消失，
+            # 浅色下因为目标色更暗、通道不溢出而完全看不出来。用户截图报的
+            # 就是"深色下少了开关"。mix() 现在夹取值，这条从行为上钉住它。
+            _theme_keep = gui.THEME
+            for _th in ("light", "dark"):
+                gui.apply_theme(_th)
+                _v = tk.BooleanVar(value=False)
+                _sw = gui.ToggleSwitch(root, _v)
+                root.update()
+                _v.set(True)                       # 触发 0 → 1 的弹簧动画
+                _deadline = time.time() + 1.6
+                while time.time() < _deadline:
+                    root.update()
+                    time.sleep(0.016)
+                _fills = []
+                for _it in _sw.find_all():
+                    try:
+                        _f = _sw.itemcget(_it, "fill")
+                    except Exception:
+                        _f = ""
+                    if _f:
+                        _fills.append(_f)
+                check("{}：开关从关动画到开后还在（图元没被清空）".format(_th),
+                      len(_fills) >= 4 and all(len(f) == 7 for f in _fills),
+                      repr(_fills))
+                _sw.destroy()
+            gui.apply_theme(_theme_keep)
+
+            # 根因那条：mix() 拿到过冲的 t 也不许吐出非法颜色。
+            _bad_mix = []
+            for _t in (-0.5, 0.0, 0.37, 1.0, 1.055, 1.155, 2.0):
+                _c = gui.mix("#A0A0A0", "#66CCFF", _t)
+                if len(_c) != 7:
+                    _bad_mix.append((_t, _c))
+            check("mix() 过冲时也不吐非法颜色（8 位串会让 Tk 抛异常）",
+                  not _bad_mix, repr(_bad_mix))
+
             # 登录按钮点下去会建窗口、生成二维码 —— 这条路也真的走一遍。
             # 把 QrLogin 换成一个假的（不联网），二维码本身是真的 qr.py 画的。
             class _FakeQrLogin:
