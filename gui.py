@@ -2178,8 +2178,11 @@ class App:
         self.btn_theme.set_dark(THEME == "dark")
 
         # 可能换行的文字限制宽度，别顶出画布
+        # 状态文字限宽。**不能给到整个窗口宽** —— 头图左边那块浅色区是留给
+        # 文字的，写太长就压到人物脸上，看着"乱"（用户报过）。400 是那段
+        # 浅色区的宽度，超出就换行，宁可两行也别糊在画上。
         for lbl in (self.lbl_conn, self.lbl_sources, self.lbl_alert):
-            self.head.itemconfig(lbl.item, width=w - 52)
+            self.head.itemconfig(lbl.item, width=min(w - 52, 400))
 
     def _build_ui(self):
         self._setup_style()
@@ -3443,6 +3446,9 @@ class App:
                                                    name="monitor")
             self.monitor_thread.start()
             self._set_state(STATE_RUNNING)
+            # 起来之后立刻刷一次顶栏那句「QQ 已就绪」—— 原来它只在**停止监控**
+            # 的时候才刷新，于是一直停在"未就绪"，跟日志对不上（用户报的就是这个）。
+            self.refresh_status()
             core.log("监控已开始。关掉本窗口或点「停止」都会结束。")
 
         self.run_async(work, done)
@@ -4373,6 +4379,12 @@ class App:
         elif self.state != STATE_RUNNING:
             self.lbl_alert.config(text="")
 
+        # 顶栏那句「QQ 已就绪」也得跟着变：NapCat 掉线自动拉起之后、
+        # 或者用户重开 QQ 之后，这里要能自己纠正过来。32 秒一次，
+        # 打的是本机 NapCat，不心疼。
+        self._health_ticks = getattr(self, "_health_ticks", 0) + 1
+        if self._health_ticks % 4 == 1:
+            self.refresh_status()
         self.root.after(8000, self._poll_health)
 
     def _poll_trigger(self):
