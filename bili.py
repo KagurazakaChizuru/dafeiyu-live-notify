@@ -84,6 +84,11 @@ _DM_PROBE = {
 _MIN_GAP = 1.5
 
 
+#: 拿它当"凭据还有没有效"的对照账号：B站官方号，动态不断。
+#: **别改成别的 mid** —— 这个自检成立的前提是"它一定有动态"。
+CONTROL_MID = 2
+
+
 class BiliError(Exception):
     """取数据失败。文案要能直接给用户看。"""
 
@@ -271,9 +276,11 @@ class Space:
                          referer=ref, cookie="SESSDATA=" + sessdata)
         code = data.get("code")
         if code in (-352, -401):
-            # 凭据过期也会走到这里，而 -352 的文案完全看不出是这个原因
-            raise BiliError("动态接口不认这个登录态：code={}（SESSDATA 过期了？）"
-                            .format(code))
+            # 注意：**凭据过期不会走到这里**。实测过期/写错的凭据照样回 code=0，
+            # 只是 items 空。这里挡的是风控和"压根没带登录态"两种。
+            raise BiliError("动态接口回了 {}（风控或没带登录态）。"
+                            "凭据是否还有效要用 Space.sessdata_looks_ok() 对照着看 —— "
+                            "过期的凭据不报错，只会读到空".format(code))
         if code != 0:
             raise BiliError("取动态失败：code={} msg={}".format(
                 code, data.get("message")))
@@ -293,6 +300,22 @@ class Space:
             })
         out.sort(key=lambda x: x["created"])
         return out
+
+    def sessdata_looks_ok(self, sessdata):
+        """这份登录态还能不能用。
+
+        为什么要拿**别的账号**做对照：实测（2026-09-21）错的/过期的
+        SESSDATA **不会报错** —— 接口照样回 `code=0`，只是 `items` 空。
+        也就是说"某个 UP 主最近没发动态"和"凭据已经死了"从一次返回里
+        长得一模一样。拿一个动态不断的账号（B站官方号）试一次，才分得出来。
+
+        返回 True/False。取不到（网络问题、风控）也返回 False —— 调用方
+        只该把它当"可疑"，别当判决。
+        """
+        try:
+            return bool(self.dynamics(CONTROL_MID, sessdata))
+        except BiliError:
+            return False
 
     def up_name(self, mid):
         """UP 主的显示名。拿不到就返回空串（调用方自己决定怎么兜）。"""

@@ -2948,6 +2948,17 @@ def cmd_check(cfg):
             int(sub.get("poll_seconds") or 300)))
         if sub.get("dynamics"):
             log("  [OK] 新动态也开着。")
+            # 这句是给"过了一个月突然收不到动态"准备的：那种情况下接口不报错，
+            # 只会一条都读不到，光看日志跟"这个 UP 主没发动态"没法区分。
+            if bili is not None:
+                try:
+                    if bili.Space().sessdata_looks_ok(sub.get("sessdata")):
+                        log("  [OK] 登录态有效（拿官方号对照过，读得到动态）。")
+                    else:
+                        log("  [X] 登录态可能已经失效：连官方号都一条动态读不到。"
+                            "重新取一个 SESSDATA 填进 subscribe.sessdata。", "WARN")
+                except Exception as exc:
+                    log("  [-] 登录态没验成（{}）—— 网络或风控，过会儿再试。".format(exc))
         elif not str(sub.get("sessdata") or "").strip():
             # 不是报错：动态本来就要登录态，默认就是关的。但用户要是以为
             # "订阅了就都会通知"，这一句能省掉一轮排查。
