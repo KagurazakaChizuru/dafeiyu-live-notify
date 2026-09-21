@@ -888,7 +888,7 @@ def run_bili_tests(path):
                        "modules": {"module_dynamic": {
                            "major": {"type": "MAJOR_TYPE_ARCHIVE",
                                      "archive": {"title": "被转发的视频标题"}}}}}})
-          == "被转发的视频标题")
+          == "转发自：被转发的视频标题")   # 原作者名取不到时就只写"转发自："
     check("纯文字动态不受影响",
           bili._dyn_text({"type": "DYNAMIC_TYPE_WORD",
                           "modules": {"module_dynamic": {
