@@ -3162,9 +3162,8 @@ class App:
         boot_outer.pack(fill="x", pady=(12, 0))
         self.var_autostart = tk.BooleanVar()
         toggle_row(boot, self.var_autostart, "打开程序后自动开始监控（不用再点大按钮）")
-        card_hint(boot, "勾上之后，双击图标就等于直接把监控开起来了——背后会自动拉起 "
-                        "NapCat，大约 10 秒后就绪。只想改设置时建议别勾，"
-                        "否则每次都白起一遍 NapCat。", indent=24, pady=(4, 0))
+        card_hint(boot, "勾上后双击图标就直接开监控。它会自动拉起 NapCat，"
+                        "约 10 秒就绪；只想改设置就别勾。", indent=24, pady=(4, 0))
 
         # ---------------- 群文案 ----------------
         #
@@ -3172,9 +3171,8 @@ class App:
         # 这边是顶端那句勾人的话。混在一起改一句开场白就得重排整个模板。
         hk_outer, hk = make_card(page, "群文案（开场白）")
         hk_outer.pack(fill="x", pady=(12, 0))
-        card_hint(hk, "每次开播从里面**随机挑一句**放在消息最上面，用单独一行 "
-                      "--- 分隔。留空就用内置的十条。\n"
-                      "写在「开播通知文案」里用 {hook} 引用。",
+        card_hint(hk, "每条开播文案从里面**随机挑一句**，用 {hook} 引用；"
+                      "多条用单独一行 --- 分隔，留空用内置十条。",
                   indent=0, pady=(2, 6))
         self.txt_hooks = tk.Text(hk, height=6, wrap="word", font=(FONT, 10),
                                  background=SUNKEN, foreground=TEXT,
@@ -3403,12 +3401,10 @@ class App:
                 core.log("已拉起 NapCat，等待它登录并开放接口（最多 90 秒）…")
                 if not wait_for_port(3000, 90, should_cancel=stop_event.is_set):
                     return "error", ("NapCat 没能在 90 秒内就绪。\n\n"
-                                     "如果它需要扫码登录，请用浏览器打开：\n"
-                                     "    http://127.0.0.1:6099/webui\n\n"
-                                     "（也可以直接用看图软件打开\n"
-                                     "  app\\napcat\\cache\\qrcode.png）\n\n"
-                                     "扫码登录一次之后，以后就不用再扫了。\n"
-                                     "详细过程见「运行日志」标签页。")
+                                     "要扫码登录就用浏览器打开：\n"
+                                     "    http://127.0.0.1:6099/webui\n"
+                                     "或用看图软件打开 app\\napcat\\cache\\qrcode.png\n\n"
+                                     "扫一次以后不用再扫。过程见「运行日志」。")
                 core.log("NapCat 已就绪")
             else:
                 core.log("NapCat 已经在运行")
@@ -3482,9 +3478,8 @@ class App:
             self._set_state(STATE_IDLE, "（已有实例在跑）")
             messagebox.showwarning(
                 "没启动",
-                "已经有一个直播姬在监控了，这次没有重复启动。\n\n"
-                "同时跑两个会让群里收到双份通知。要换一个，先把上一个停掉。\n"
-                "（详情见「运行日志」标签页）")
+                "已经有一个在监控了，这次没重复启动 —— "
+                "同时跑两个群里会收到双份。要换先把上一个停掉。")
             return
         if self.state == STATE_RUNNING:
             self._set_state(STATE_IDLE, "（监控已结束）")
@@ -3733,9 +3728,8 @@ class App:
                 if not (_n and _b):
                     raise ValueError(
                         "开了群聊，但找不到 node 或 dsh。\n\n"
-                        "程序会去找 node.exe 和 @deepseek-ai/dsh 的 bin.js；"
-                        "找不到就在配置里手填 chat.node / chat.dsh_bin。\n"
-                        "（也可以在命令行跑一次：dsh --profile groupchat \"你好\"）")
+                        "程序会自动找 node.exe 和 dsh 的 bin.js；"
+                        "找不到就在配置里手填 chat.node / chat.dsh_bin。")
 
             # 下播文案跟开播一样是多条，用单独一行 --- 分隔。
             # 存的时候铺开成 templates 列表 + template（第一条）——
@@ -3892,8 +3886,8 @@ class App:
             # 实测这行提示过过一次时 —— 界面已经有了扫码登录，提示还在教抄 cookie，
             # 用户照着做只会更糊。
             return ("勾了「也通知动态」，但还没登录 B站。\n\n"
-                    "动态接口匿名读不到（实测，B站官方号也一样），"
-                    "点上面的「登录 B站（扫码）」扫一下就行，不用抄 cookie。")
+                    "动态匿名读不到（官方号也一样），"
+                    "点上面「登录 B站（扫码）」扫一下就行。")
         return None
 
     def _sub_need_login(self):
@@ -4141,8 +4135,8 @@ class App:
         raw = self.var_sub_mid.get().strip()
         if not raw.isdigit():
             messagebox.showinfo(
-                "提示", "UID 只能是数字。在 UP 主的空间地址里看：\n"
-                        "space.bilibili.com/12345678  →  12345678")
+                "提示", "UID 是数字，看空间地址：\n"
+                        "space.bilibili.com/12345678 → 12345678")
             return
         mid = int(raw)
         sub = self.cfg.setdefault("subscribe", {})
@@ -4634,9 +4628,8 @@ class App:
         win.transient(self.root)
 
         head = tk.Label(win,
-                        text="下面这些**只是渲染结果**，一条都没发出去。\n"
-                             "点「换一批」重新随机挑文案 —— 池子里有十几句，"
-                             "多翻几次就知道自己喜欢哪套。",
+                        text="下面**只是渲染结果**，一条都没发出去。"
+                             "点「换一批」再随机挑一批。",
                         background=BG, foreground=MUTED, font=(FONT, 9),
                         justify="left", anchor="w", padx=16, pady=12)
         head.pack(fill="x")
