@@ -1113,14 +1113,21 @@ def run_bili_tests(path):
                 return True, {"message_id": 1}
             return True, {}
 
+    # **游标字段只能用 real_seq。** 实测 NapCat 的 message_seq 是随机数
+    # （2065093073 → 1337519212 → 323951142，忽大忽小）—— 拿它当游标，
+    # 游标会跑到消息号前面，之后所有新消息都被跳过。所以这里故意把
+    # message_seq 写成乱序的随机样式：谁改回用错字段，下面就会红。
     _msgs = {
         111: [
-            {"message_seq": 5, "user_id": 10001, "message": []},       # 机器人自己
-            {"message_seq": 6, "user_id": 20002, "message": [
-                {"type": "text", "data": {"text": "随便说点什么"}}]},   # 没 @
-            {"message_seq": 7, "user_id": 20003, "message": [
-                {"type": "at", "data": {"qq": "10001"}},
-                {"type": "text", "data": {"text": " 提醒我 30分钟后 喝水"}}]},
+            {"real_seq": "10", "message_seq": 2065093073, "user_id": 10001,
+             "message": []},                                        # 机器人自己
+            {"real_seq": "11", "message_seq": 1337519212, "user_id": 20002,
+             "message": [{"type": "text",
+                          "data": {"text": "随便说点什么"}}]},       # 没 @
+            {"real_seq": "12", "message_seq": 323951142, "user_id": 20003,
+             "message": [
+                 {"type": "at", "data": {"qq": "10001"}},
+                 {"type": "text", "data": {"text": " 提醒我 30分钟后 喝水"}}]},
         ]
     }
     _fb = FakeBot(_msgs)
@@ -1128,6 +1135,19 @@ def run_bili_tests(path):
                        "reminder": True, "cooldown_seconds": 0},
                       _fb, state={"groups": {}, "reminders": []},
                       runner=lambda p: "（不该被叫到）")
+    check("第一次见到这个群只记基线，不回老消息", _bot.poll() == 0)
+    check("基线记的是 real_seq（不是那个随机的 message_seq）",
+          _bot.state["groups"]["111"] == 12, repr(_bot.state["groups"]))
+    _fb.sent[:] = []
+    _n = _bot.poll()
+    check("没有新消息时什么都不做", _n == 0 and not _fb.sent, repr(_n))
+    # 来一条新的 @
+    _msgs[111].append({"real_seq": "13", "message_seq": 999999999,
+                       "user_id": 20003,
+                       "message": [
+                           {"type": "at", "data": {"qq": "10001"}},
+                           {"type": "text",
+                            "data": {"text": " 提醒我 30分钟后 喝水"}}]})
     _n = _bot.poll()
     check("只处理 @了机器人的那条", _n == 1, repr(_n))
     check("记下提醒并回话", len(_bot.state["reminders"]) == 1

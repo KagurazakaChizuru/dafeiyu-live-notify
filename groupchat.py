@@ -231,11 +231,28 @@ class ChatBot(object):
                 continue
             key = str(gid)
             last = int(seen.get(key) or 0)
-            newest = last
+            # **游标只能用 real_seq。** 实测：NapCat 的 message_seq / message_id
+            # 是随机 32 位数（2065093073 → 1337519212 → 323951142，忽大忽小），
+            # 拿它当游标比大小，游标会一下跑到消息号前面去，之后所有新消息
+            # 全被判成"看过的"跳过 —— 表现就是"@ 了机器人没反应"。
+            # real_seq 是老老实实 +1 的计数器（498413、498414…）。
+            seqs = {}
             for msg in msgs:
-                seq = int(msg.get("message_seq") or msg.get("message_id") or 0)
-                newest = max(newest, seq)
-                if seq <= last:
+                try:
+                    seqs[id(msg)] = int(str(msg.get("real_seq") or "0"))
+                except ValueError:
+                    seqs[id(msg)] = 0
+            newest = max([last] + list(seqs.values()))
+            if not last and newest:
+                # 第一次见到这个群：**只记基线，不倒回去回老消息**
+                # （跟订阅"首次不补发历史"同一条纪律）
+                seen[key] = newest
+                self._save()
+                self.log("群聊：第一次见到群 {}，记下当前位置（不回老消息）".format(gid))
+                continue
+            for msg in msgs:
+                seq = seqs.get(id(msg), 0)
+                if not seq or seq <= last:
                     continue
                 if str(msg.get("user_id") or "") == bot:   # 自己发的，不理
                     continue
