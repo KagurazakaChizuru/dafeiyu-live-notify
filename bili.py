@@ -1,0 +1,283 @@
+"""B 站空间数据的只读访问 —— 纯标准库实现。
+
+用途
+----
+订阅某个 UP 主，看看他有没有新投稿。
+
+为什么要自己算签名
+------------------
+B 站从 2023 年起给空间类接口上了 **wbi 签名**（参数里的 `w_rid`）。算法是公开
+的：取 `x/web-interface/nav` 给的 `img_key` / `sub_key`，拼起来按一张固定的
+64 位混淆表重排、取前 32 字当密钥；请求参数按 key 排序、连 `wts` 一起做 MD5。
+**全程只需要 hashlib + urllib**，所以不必为此引入任何第三方库 —— 那是本项目
+的硬约束（见开发文档「必须遵守的工程约定」）。
+
+匿名可用性（2026-09-21 实测）
+----------------------------
+投稿列表 `x/space/wbi/arc/search` **不登录也能通**，但三样缺一不可：
+
+    1. wbi 签名（w_rid + wts）
+    2. 指纹 buvid3 + buvid4（`x/frontend/finger/spi` 匿名可取）
+    3. web 端那串 `dm_img_*` 探针参数
+
+第 3 样最容易被忽略，也最坑：**缺了它，同一个请求会返回 `-352`（风控）**，
+而报错文案只说"风控校验失败"，看不出缺的是哪个参数。实测补齐后即 `code=0`。
+
+动态接口 `x/polymer/web-dynamic/v1/feed/space` 即使带全指纹仍是 `-352` ——
+**那条要登录态（SESSDATA）**，本模块刻意不做：一个"通知器"不该为了多读一种
+内容而长期持有用户的 B 站登录态。
+
+网络行为
+--------
+只访问 `api.bilibili.com`，**直连、不走系统代理**（`ProxyHandler({})`）。
+和 OneBot 客户端同样的理由：系统代理会劫持本地/境内请求，实测直接 502。
+
+请求头**刻意只发 User-Agent 和 Referer**。这不是偷懒：实测带上
+`Accept` / `Accept-Language` 反而会被 WAF 判成伪造请求（HTTP 412，
+`{"code":-412,"message":"request was banned"}`），去掉就 code=0。
+"像浏览器缺一半"比"明摆着是脚本"更容易被挡。
+
+**会被风控限流，这是实测的（2026-09-21）。** 同一个请求、同一份指纹，短时间内
+打十几次之后，所有空间请求会一起变成 **HTTP 412**（连 JSON 都不是），换个
+UP 主也一样 —— 它是按来源限的，不是按参数。等一段时间会自己恢复。
+
+所以这个模块的调用方必须做到两点：
+
+    · **轮询间隔按分钟算**（本项目默认 300 秒），不要秒级试
+    · 拿到风控码就**退避**并如实记一行 WARN，别重试到把额度耗光
+
+`_MIN_GAP` 只是"两次调用之间"的兜底，它不是轮询间隔。
+"""
+
+import base64
+import hashlib
+import json
+import re
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+API = "https://api.bilibili.com"
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/122.0 Safari/537.36")
+
+#: wbi 混淆表。它是 0..63 的一个置换，作用是把 img_key+sub_key 打散。
+_MIXIN_TAB = [
+    46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
+    33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40, 61,
+    26, 17, 0, 1, 60, 51, 30, 4, 22, 25, 54, 21, 56, 59, 6, 63, 57, 62, 11, 36,
+    20, 34, 44, 52,
+]
+
+#: 风控探针参数。**值本身没有意义**，接口只校验它们存在、格式像那么回事。
+#: 缺了这组参数会拿到 -352，而错误文案完全看不出是这个原因。
+_DM_PROBE = {
+    "dm_img_list": "[]",
+    "dm_img_str": "V2ViR0wgMS4wIChPcGVuR0wgRVMgMi4wIENocm9taXVtKQ",
+    "dm_cover_img_str": "QU5HTEUgKEludGVsLCBNZXNhIEludGVsKFIpIFUrSCBHcmFwaGljcw",
+    "dm_img_inter": '{"ds":[],"wh":[0,0,0],"of":[0,0,0]}',
+}
+
+#: 两次请求之间至少隔这么久。实测连打会拿到 -799（请求过于频繁），
+#: 而那个码看起来像"没权限"。轮询间隔本来就有分钟级，这里只是兜底。
+_MIN_GAP = 1.5
+
+
+class BiliError(Exception):
+    """取数据失败。文案要能直接给用户看。"""
+
+
+def _opener():
+    # 显式禁代理：系统代理会把这个请求也劫走。
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def _mixin_key(img_key, sub_key):
+    raw = img_key + sub_key
+    return "".join(raw[i] for i in _MIXIN_TAB)[:32]
+
+
+def _sign(params, mixin_key):
+    """算出带 w_rid 的查询串。
+
+    `!'()*` 这几个字符要先去干净，B 站那边也是这么处理的 —— 不一致就签名
+    对不上，而报错同样是含糊的风控码。
+    """
+    clean = {k: re.sub(r"[!'()*]", "", str(v)) for k, v in params.items()}
+    clean["wts"] = int(time.time())
+    query = urllib.parse.urlencode(sorted(clean.items()))
+    clean["w_rid"] = hashlib.md5((query + mixin_key).encode()).hexdigest()
+    return urllib.parse.urlencode(sorted(clean.items()))
+
+
+class Space:
+    """一个可复用的会话：拿着 wbi 密钥与指纹去读空间数据。
+
+    密钥与指纹都是**当天有效**的东西，所以缓存起来反复用；一旦接口回风控码
+    就重新取一次（密钥会在服务端轮换，跨零点尤其容易失效）。
+    """
+
+    def __init__(self):
+        self.opener = _opener()
+        self._img = ""
+        self._sub = ""
+        self._cookie = ""
+        self._last_call = 0.0
+        self._token_day = ""
+
+    # ---- 基础设施 ----
+    def _get(self, path, query="", referer="https://www.bilibili.com/"):
+        """发一个请求。
+
+        **`Referer` 必须像那么回事。** 实测：空间接口的 Referer 写成光秃秃的
+        站根（`https://space.bilibili.com/`）会被挡在 WAF 外面，回 **HTTP 412**
+        ——连 JSON 都不是，报错看不出原因。指到具体空间页（`/<mid>/video`）
+        就正常返回 `code=0`。
+        """
+        url = API + path + ("?" + query if query else "")
+        req = urllib.request.Request(url)
+        # 只发 User-Agent 和 Referer —— **多发头反而会被挡**。
+        #
+        # 实测（同一进程、同一个 URL、同一份 cookie）：
+        #   带 Accept + Accept-Language        -> HTTP 412，body 是
+        #                                        {"code":-412,"message":"request was banned"}
+        #   只带 User-Agent + Referer          -> code=0，171 条投稿
+        #   只带 User-Agent + Referer，无 cookie -> code=0
+        # 两次独立复现。看着像是"声称自己是浏览器、却缺了 sec-ch-ua / sec-fetch
+        # 那一整套"反而更像伪造请求 —— 所以这里刻意少发，不是漏了。
+        req.add_header("User-Agent", UA)
+        req.add_header("Referer", referer)
+        if self._cookie:
+            req.add_header("Cookie", self._cookie)
+        gap = _MIN_GAP - (time.time() - self._last_call)
+        if gap > 0:
+            time.sleep(gap)
+        try:
+            with self.opener.open(req, timeout=15) as resp:
+                body = resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as exc:
+            raise BiliError("B 站返回 HTTP {}（多半是风控，稍后再试）".format(exc.code))
+        except Exception as exc:
+            raise BiliError("连不上 B 站：{}".format(exc))
+        finally:
+            self._last_call = time.time()
+        try:
+            return json.loads(body)
+        except ValueError:
+            raise BiliError("B 站返回的不是 JSON（可能被劫持或改版）")
+
+    def _ensure_token(self, force=False):
+        today = time.strftime("%Y-%m-%d")
+        if not force and self._cookie and self._token_day == today:
+            return
+        nav = self._get("/x/web-interface/nav",
+                        referer="https://www.bilibili.com/")
+        wbi = ((nav.get("data") or {}).get("wbi_img") or {})
+        img = (wbi.get("img_url") or "").rsplit("/", 1)[-1].split(".")[0]
+        sub = (wbi.get("sub_url") or "").rsplit("/", 1)[-1].split(".")[0]
+        if not img or not sub:
+            raise BiliError("拿不到 wbi 密钥（B 站可能改版了）")
+        spi = self._get("/x/frontend/finger/spi",
+                        referer="https://www.bilibili.com/")
+        data = spi.get("data") or {}
+        b3, b4 = data.get("b_3", ""), data.get("b_4", "")
+        if not b3:
+            raise BiliError("拿不到 buvid 指纹（B 站可能改版了）")
+        self._img, self._sub = img, sub
+        self._cookie = "buvid3={}; buvid4={}; b_nut={}".format(
+            b3, b4, int(time.time()))
+        self._token_day = today
+
+    # ---- 对外接口 ----
+    def videos(self, mid, page_size=25):
+        """取这个 UP 主最新的一批投稿（按发布时间倒序）。
+
+        返回 [{"bvid","title","created","link"}, ...]；created 是 epoch 秒。
+        """
+        mid = int(mid)
+        self._ensure_token()
+        # 参数集对齐实测可用的那一份（多出的 c_loc / q 留空即可）。
+        params = {
+            "mid": mid, "ps": int(page_size), "pn": 1,
+            "order": "pubdate", "platform": "web",
+            "web_location": 1550101, "otype": "json", "c_loc": "", "q": "",
+            "sort_field": 0, "tid": 0, "user_type": 0,
+        }
+        params.update(_DM_PROBE)
+        ref = "https://space.bilibili.com/{}/video".format(mid)
+        query = _sign(params, _mixin_key(self._img, self._sub))
+        data = self._get("/x/space/wbi/arc/search", query, referer=ref)
+        code = data.get("code")
+        if code != 0:
+            # 密钥可能刚轮换过，重取一次再试一回；再不行就如实报错。
+            self._ensure_token(force=True)
+            query = _sign(params, _mixin_key(self._img, self._sub))
+            data = self._get("/x/space/wbi/arc/search", query, referer=ref)
+            code = data.get("code")
+        if code != 0:
+            raise BiliError("取投稿列表失败：code={} msg={}（-352 是风控，"
+                            "-799 是请求太快）".format(code, data.get("message")))
+
+        vlist = (((data.get("data") or {}).get("list") or {}).get("vlist")) or []
+        out = []
+        for item in vlist:
+            bvid = item.get("bvid") or ""
+            if not bvid:
+                continue
+            out.append({
+                "bvid": bvid,
+                "title": str(item.get("title") or "").strip(),
+                "created": int(item.get("created") or 0),
+                "link": "https://www.bilibili.com/video/" + bvid,
+                "cover": item.get("pic") or "",
+            })
+        return out
+
+    def up_name(self, mid):
+        """UP 主的显示名。拿不到就返回空串（调用方自己决定怎么兜）。"""
+        try:
+            data = self._get(
+                "/x/web-interface/card?mid={}&photo=false".format(int(mid)),
+                referer="https://space.bilibili.com/{}".format(int(mid)))
+            return str(((data.get("data") or {}).get("card") or {}).get("name") or "")
+        except BiliError:
+            return ""
+
+
+def _fmt_time(epoch):
+    if not epoch:
+        return ""
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(epoch))
+
+
+def main(argv=None):
+    """自检入口：python bili.py <mid> [条数]"""
+    import sys
+    argv = list(argv if argv is not None else sys.argv[1:])
+    # 标题里可能有 emoji，而 Windows 控制台默认是 GBK —— 不切编码就崩在 print 上
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    if not argv:
+        print("用法：python bili.py <mid> [条数]")
+        return 2
+    mid = argv[0]
+    limit = int(argv[1]) if len(argv) > 1 else 5
+    space = Space()
+    try:
+        name = space.up_name(mid)
+        vids = space.videos(mid)
+    except BiliError as exc:
+        print("失败：{}".format(exc))
+        return 1
+    print("UP：{}（{}）  最新 {} 条：".format(name or "?", mid, min(limit, len(vids))))
+    for v in vids[:limit]:
+        print("  {}  {}  {}".format(_fmt_time(v["created"]), v["bvid"], v["title"]))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

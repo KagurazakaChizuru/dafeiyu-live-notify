@@ -70,9 +70,14 @@ try:
 except ImportError:                # 缺文件时通知里就不带游戏名
     games = None
 
+try:
+    import bili                    # 订阅 UP 主的新投稿（wbi 签名，纯标准库）
+except ImportError:                # 缺文件时订阅功能整体降级
+    bili = None
+
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.7.6"
+VERSION = "1.8.0"
 
 def _resolve_base_dir():
     """确定**数据目录**（config.json / logs / napcat 所在处）。
@@ -92,6 +97,10 @@ def _resolve_base_dir():
 BASE_DIR = _resolve_base_dir()
 DEFAULT_CONFIG = os.path.join(BASE_DIR, "config.json")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
+#: 订阅状态：每个 UP 上次见到的最新投稿时间。
+#: 放在 logs 下是有实际理由的 —— 打包时那个目录要被排除，
+#: 状态文件跟着它走，就不会意外被打进发布包。
+SUB_STATE_PATH = os.path.join(LOG_DIR, "subscribe-state.json")
 
 # --------------------------------------------------------------------------
 #  内置文案池
@@ -213,6 +222,19 @@ TEMPLATE_POOLS = {
         "🎮 续上，现在打《{game}》\n{link}",
         "🔄 换个战场，现在打《{game}》\n{link}",
         "🎯 现在打《{game}》\n{link}",
+    ],
+    # 新投稿 —— 订阅的 UP 主发了视频。
+    #
+    # 三条规矩跟别的池子一样：不写死时段、不堆形容词、不把可选信息塞进句子的
+    # 必要成分里。{up} 取不到时是空串，那一行会被整行删掉；整条被删空时
+    # render_text 会退回未删行的版本，绝不会发出空消息。
+    "video": [
+        "🔔 {up} 更新了\n\n{title}\n{link}",
+        "📺 有新视频了\n\n{title}\n{up}\n{link}",
+        "🔔 蹲到了，{up} 发新视频\n\n{title}\n{link}",
+        "📼 新的一期\n\n{title}\n{link}",
+        "🔔 更新提醒\n\n{title}\n{link}",
+        "📺 {up} 那边有新东西\n\n{title}\n{link}",
     ],
 }
 
@@ -735,6 +757,46 @@ def load_config(path):
         "grace_seconds": offline_grace,
     }
 
+    # --- subscribe：订阅 UP 主的新投稿 ---
+    #
+    # 默认关闭，而且**没有 ups 就等于关闭** —— 一个会往外发请求的功能，
+    # 不该因为"配置里少写了一个开关"就自己跑起来。
+    subscribe = raw.get("subscribe") or {}
+    if not isinstance(subscribe, dict):
+        raise ConfigError("subscribe 必须是一个对象。")
+    ups = []
+    for item in (subscribe.get("ups") or []):
+        if not isinstance(item, dict):
+            raise ConfigError('subscribe.ups 的每一项都必须是对象，例如 '
+                              '{"mid": 123456, "note": "某个 UP"}')
+        raw_mid = item.get("mid")
+        if raw_mid in (None, "", 0, "0"):
+            raise ConfigError("subscribe.ups 里有一项没填 mid。")
+        try:
+            mid = int(raw_mid)
+        except (TypeError, ValueError):
+            raise ConfigError(
+                "subscribe.ups 的 mid 必须是数字，当前为：{!r}".format(raw_mid))
+        ups.append({
+            "mid": mid,
+            "enabled": _as_bool(item.get("enabled", True), True),
+            "note": str(item.get("note") or ""),
+        })
+    subscribe_cfg = {
+        "enabled": _as_bool(subscribe.get("enabled", False), False) and bool(ups),
+        # **按分钟轮询。** 实测：同一个请求短时间打十几次就会吃到 HTTP 412，
+        # 而且那是按来源限的（换个 UP 主也一样），所以要给足间隔。
+        # 下限 60 秒是硬拦，默认 300。
+        "poll_seconds": max(60.0, _as_num(subscribe.get("poll_seconds"), 300.0,
+                                          "subscribe.poll_seconds")),
+        "template": str(subscribe.get("template") or TEMPLATE_POOLS["video"][0]),
+        "templates": [str(x) for x in (subscribe.get("templates") or [])
+                      if str(x).strip()]
+                     or _own_first(subscribe.get("template"), TEMPLATE_POOLS["video"]),
+        "at_all": _as_bool(subscribe.get("at_all", False), False),
+        "ups": ups,
+    }
+
     # --- 模板占位符校验（不报错，只记下来给 check 看）---
     # 这里刻意**不抛异常**：一个拼错的占位符不该让整个程序起不来。
     # 它会在 check 里被明确列出来，同时渲染时会被剔除。
@@ -743,6 +805,7 @@ def load_config(path):
         "offline_message": offline_cfg,
         "reminder": reminder_cfg,
         "game": game_cfg,
+        "subscribe": subscribe_cfg,
     }
 
     # --- behavior / control ---
@@ -844,6 +907,7 @@ def load_config(path):
         "control": control_cfg,
         "trigger": trigger_cfg,
         "offline_message": offline_cfg,
+        "subscribe": subscribe_cfg,
         "ui": ui_cfg,
         "_path": os.path.abspath(path),
         # 模板里拼错的占位符。这里查出来给 check 用，**不拦启动** ——
@@ -1084,7 +1148,7 @@ def pick_template(cfg, template=None):
 #: 而不是渲染成「正在玩《》」这种残缺的句子。
 # room_title / room_desc 也要列进来：接口偶尔抽风取不到时，模板里那一行
 # 应该整个消失，而不是留一个空行 —— 上一版漏了它们，实测就是这样。
-DROP_LINE_WHEN_EMPTY = ("game", "peak", "room_title", "room_desc", "title")
+DROP_LINE_WHEN_EMPTY = ("game", "peak", "room_title", "room_desc", "title", "up")
 
 
 #: 模板里允许出现的占位符。
@@ -1105,6 +1169,8 @@ ALLOWED_PLACEHOLDERS = frozenset({
     "room_title",
     # 直播公告 / 简介（已剥掉 HTML）
     "room_desc",
+    # 订阅的 UP 主名字（新投稿播报用）。取不到时是空串，那几行会被整行删掉。
+    "up",
 })
 
 #: 匹配一对花括号里的内容。不要求里面合法 —— 畸形的也要能抓出来。
@@ -1173,6 +1239,8 @@ TEMPLATE_SLOTS = (
     ("reminder", "templates", "二次提醒"),
     ("game", "change_template", "换游戏文案"),
     ("game", "change_templates", "换游戏文案"),
+    ("subscribe", "template", "新投稿文案"),
+    ("subscribe", "templates", "新投稿文案"),
 )
 
 
@@ -1223,6 +1291,8 @@ def render_text(cfg, template=None, extra=None):
         "game": "",
         "peak": "",
         "duration": "",
+        # 订阅播报用；普通消息里它没值，写了 {up} 的那行会被删掉
+        "up": "",
     }
     # 时段词在**这一刻**取，不是配置加载时 —— 程序会挂着跨过深夜。
     _tod, _wd = time_words()
@@ -1315,7 +1385,134 @@ def preview_messages(cfg, samples=None):
     items.append(("开播通知（没取到标题时）", render_text(
         cfg, extra={"game": game, "room_title": "", "room_desc": ""})))
 
+    sub_cfg = cfg.get("subscribe") or {}
+    if sub_cfg.get("enabled"):
+        items.append(("新投稿", render_text(
+            cfg,
+            template=pick_from(sub_cfg.get("templates"), sub_cfg.get("template"),
+                               kind="video"),
+            extra={"up": "某位 UP 主", "title": "这期的标题大概长这样",
+                   "link": "https://www.bilibili.com/video/BV1xx411c7mD"})))
+
     return items
+
+
+#: 被 B站挡下之后退避多久。**不复用 poll_seconds** —— 那个是"多久看一次新视频"，
+#: 这个是"被拒之后多久再敲门"。撞上风控还按原节奏敲，只会把封禁拖长：
+#: 实测空间接口的匿名配额很小，同一来源敲多了会一起 412，换 UP 主也一样。
+SUB_BACKOFF_SECONDS = 900
+
+
+def poll_subscriptions(subscribe_cfg, state, space, announce, log=None, now=None):
+    """扫一遍订阅的 UP 主，该播报的交给 announce(video, up_name, label)。
+
+    抽成模块级函数是为了能单测 —— 它最要紧的两条纪律都只在**第二次轮询**
+    才体现，留在闭包里试不出来：
+      · 第一次见到某个 UP 主时**只记基线、不补发**（否则刚订阅就把人家
+        几年的旧投稿刷进群里）；
+      · 按**发布时间**比对，不按"在列表里的位置"（列表随翻页滚动）。
+
+    取投稿失败只跳过这一个 UP 主，不往外抛 —— 一个 UP 主取不到不该让整轮
+    停摆（跟群发失败重试那边同一个考虑）。但**会记下退避时刻**：被挡之后
+    按原节奏接着敲，等于把封禁往外拖。
+
+    `now` 只是给测试用的注入口，正常运行不传。
+    返回 (播报条数, 状态是否有变化)。
+    """
+    def say(msg, level="INFO"):
+        if log:
+            log(msg, level)
+
+    if now is None:
+        now = time.time()
+    until = float(state.get("backoff_until") or 0)
+    if until > now:
+        say("订阅：上一轮被 B 站挡了，退避到 {} 再试。".format(
+            time.strftime("%H:%M", time.localtime(until))))
+        return 0, False
+
+    ups = [u for u in (subscribe_cfg.get("ups") or []) if u.get("enabled")]
+    if not ups:
+        return 0, False
+
+    seen = state.setdefault("ups", {})
+    announced = 0
+    changed = False
+    for up in ups:
+        mid = up["mid"]
+        key = str(mid)
+        try:
+            vids = space.videos(mid)
+        except Exception as exc:           # 网络/风控/解析，一律只跳过这一个
+            say("订阅 {} 取投稿失败：{}（退避 {} 分钟再试）".format(
+                up.get("note") or mid, exc, SUB_BACKOFF_SECONDS // 60), "WARN")
+            state["backoff_until"] = now + SUB_BACKOFF_SECONDS
+            state["backoff_reason"] = str(exc)
+            changed = True
+            continue
+        if state.pop("backoff_until", None) is not None:
+            # 通了就把退避撤掉，否则要等满 15 分钟才恢复正常节奏
+            state.pop("backoff_reason", None)
+            changed = True
+        if not vids:
+            continue
+        newest = max(int(v.get("created") or 0) for v in vids)
+        rec = seen.get(key) or {}
+        last = int(rec.get("last_created") or 0)
+        name = str(rec.get("up") or "")
+        if not name:
+            # 名字只是给文案里 {up} 用的，取不到就算了，不该因此不播报
+            try:
+                name = str(space.up_name(mid) or "")
+            except Exception:
+                name = ""
+        label = up.get("note") or name or str(mid)
+
+        if not last:
+            say("订阅 {}：第一次见到，记下当前最新一条，不补发历史。".format(label))
+        else:
+            backlog = len([v for v in vids
+                           if int(v.get("created") or 0) > last])
+            fresh = pick_fresh(vids, last)
+            if len(fresh) < backlog:
+                say("订阅 {}：积压 {} 条，只播报最新一条。".format(label, backlog),
+                    "WARN")
+            for v in fresh:
+                try:
+                    announce(v, name, label)
+                    announced += 1
+                except Exception as exc:
+                    say("新投稿播报出错：{}".format(exc), "ERROR")
+
+        fresh_rec = {"last_created": max(last, newest), "up": name}
+        if seen.get(key) != fresh_rec:
+            seen[key] = fresh_rec
+            changed = True
+    return announced, changed
+
+
+def pick_fresh(videos, last_created, cap=3):
+    """从一批投稿里挑出**该播报的**那几条，按发布时间从旧到新。
+
+    抽成模块级函数是为了能单测 —— 这段判断有两处特别容易写错：
+
+      · 用"在列表里的位置"而不是"发布时间"比对。列表会随翻页滚动，位置一变
+        就会漏报或重报；按 created 比对才稳。
+      · **last_created 为 0 表示还没有基线，此时一条都不挑。**
+        "首次订阅不补发历史"是这条功能的纪律：刚订阅就把人家几年的旧视频刷进
+        群里，是最典型的失败方式（跟"启动时已在直播不补发"是同一个道理）。
+
+    cap 是积压上限：程序关了半个月再打开，一次往群里倒十几条同样招人烦，
+    超过就只报最新的一条。
+    """
+    last = int(last_created or 0)
+    if last <= 0:
+        return []
+    fresh = [v for v in (videos or []) if int(v.get("created") or 0) > last]
+    fresh.sort(key=lambda v: int(v.get("created") or 0))
+    if cap and len(fresh) > cap:
+        fresh = fresh[-1:]
+    return fresh
 
 
 def build_message(group, text, image=""):
@@ -1884,6 +2081,28 @@ class SingleInstance(object):
             pass
 
 
+def _load_sub_state():
+    """读订阅状态。读不到就当空的 —— 状态丢了顶多多报一次，不该拦住启动。"""
+    try:
+        with open(SUB_STATE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_sub_state(state):
+    """原子写入（先写 .tmp 再 replace），免得断电时留下半个文件。"""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        tmp = SUB_STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp, SUB_STATE_PATH)
+    except OSError as exc:
+        log("订阅状态写不下来：{}".format(exc), "WARN")
+
+
 def cmd_watch(cfg, stop_event=None):
     # 单实例锁。GUI 和 CLI 都走这个函数，所以挂在这里两条路径一起覆盖。
     lock = SingleInstance()
@@ -1910,6 +2129,7 @@ def cmd_watch(cfg, stop_event=None):
     # 下播用**独立**闸门：它和开播是两件事，绝不能被开播那份 30 分钟冷却吃掉。
     # 否则「播了 10 分钟就下播」时，下播提示会被静默丢弃。
     offline_gate = triggers.CooldownGate(0) if triggers else None
+    subscribe_cfg = cfg["subscribe"]
     game_cfg = cfg.get("game") or {}
     reminder_cfg = cfg.get("reminder") or {}
     state = {
@@ -2115,6 +2335,34 @@ def cmd_watch(cfg, stop_event=None):
                                      "prev_game": prev or ""},
                        at_all=False)
 
+    sub_space = [None]      # 懒建：没订阅就不该去连 B 站
+
+    def check_subscriptions():
+        """看订阅的 UP 主有没有新投稿。判断逻辑在 poll_subscriptions 里。"""
+        if bili is None:
+            log("订阅功能需要 bili.py，当前目录里没有，跳过。", "WARN")
+            return
+        if sub_space[0] is None:
+            sub_space[0] = bili.Space()      # 懒建：没订阅就不该去连 B 站
+        state = _load_sub_state()
+
+        def announce(video, up_name, label):
+            log("订阅更新：{} 发了《{}》".format(label, video["title"]))
+            send_to_groups(
+                cfg, onebot,
+                "订阅的 UP 主发了新投稿：{}".format(video["title"]),
+                template=pick_from(subscribe_cfg.get("templates"),
+                                   subscribe_cfg.get("template"),
+                                   kind="video"),
+                extra_fields={"up": up_name, "title": video["title"],
+                              "link": video["link"]},
+                at_all=bool(subscribe_cfg.get("at_all", False)))
+
+        _, changed = poll_subscriptions(subscribe_cfg, state, sub_space[0],
+                                        announce, log)
+        if changed:
+            _save_sub_state(state)
+
     engine = TriggerEngine(cfg, fire) if tg.get("on_process_start") else None
 
     def fire_offline(duration):
@@ -2273,12 +2521,17 @@ def cmd_watch(cfg, stop_event=None):
         log("二次提醒：开播后 {} 分钟各一次（本场最多 {} 条，含开播这条）".format(
             "、".join(str(int(m)) for m in reminder_cfg["after_minutes"]),
             reminder_cfg.get("max_total")))
+    if subscribe_cfg.get("enabled"):
+        log("订阅新投稿：{} 个 UP，每 {} 秒查一次（B站公开接口）".format(
+            len([u for u in subscribe_cfg["ups"] if u.get("enabled")]),
+            int(subscribe_cfg["poll_seconds"])))
     if cfg["behavior"]["dry_run"]:
         log("当前是彩排模式（dry_run=true），不会真的发消息。", "WARN")
     log("=" * 62)
 
     try:
         next_aux = 0.0
+        next_sub = 0.0
         while True:
             if stop_event is not None and stop_event.is_set():
                 log("监控已停止。")
@@ -2298,6 +2551,15 @@ def cmd_watch(cfg, stop_event=None):
                     check_game_change()
                 except Exception as exc:
                     log("换游戏播报出错：{}".format(exc), "ERROR")
+            # 订阅检查是**分钟级**的，不能跟着 15 秒那个节奏跑 ——
+            # 实测打太快会吃到 B 站的风控（HTTP 412，按来源限）。
+            if now >= next_sub:
+                next_sub = now + float(subscribe_cfg.get("poll_seconds") or 300.0)
+                if subscribe_cfg.get("enabled"):
+                    try:
+                        check_subscriptions()
+                    except Exception as exc:
+                        log("订阅检查出错：{}".format(exc), "ERROR")
             # 分片 sleep：让"停止监控"能立刻生效，而不是干等满一个间隔
             interval = cfg["watch"]["interval_seconds"] if engine is not None else 1
             deadline = time.time() + interval
@@ -2536,6 +2798,20 @@ def cmd_check(cfg):
         log("  [X] 勾了直播间轮询却没填 room_id", "WARN")
     elif tg.get("on_platform_live"):
         log("  [OK] 直播间轮询配好了。")
+
+    sub = cfg.get("subscribe") or {}
+    if sub.get("enabled") and bili is None:
+        # 打包漏文件的典型症状：配置看着完全正常，只有运行起来才知道这一路是死的。
+        # 放在 check 里说清楚，省得去日志里翻那一行 WARN。
+        problems.append("订阅开着，但当前目录里没有 bili.py，这一路不会生效。")
+        log("  [X] 订阅开着，可是找不到 bili.py", "WARN")
+        log("      订阅 UP 主投稿的代码在 bili.py 里，打包时不能漏。")
+    elif sub.get("enabled"):
+        log("  [OK] UP 主订阅配好了（{} 个，每 {} 秒查一次）。".format(
+            len([u for u in sub.get("ups") or [] if u.get("enabled")]),
+            int(sub.get("poll_seconds") or 300)))
+    else:
+        log("  [-] 没开 UP 主订阅。")
 
     if not any(g.get("enabled") for g in cfg["groups"]):
         log("  [X] 一个启用的群都没有。", "WARN")

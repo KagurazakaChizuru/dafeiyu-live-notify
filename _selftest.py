@@ -539,7 +539,7 @@ def teardown_tk(root):
 
     本机撞上只是刷几行报错（退出码仍然是 0），CI 上却会把整个过程**吊死**：
     1.7.1 起那 13 次运行就是这么挂到 6 小时作业超时的，挂点固定在
-    「# 15/16 控件引用与创建必须对得上」之后。所以这里连同 after 一起收。
+    「# 15/17 控件引用与创建必须对得上」之后。所以这里连同 after 一起收。
     """
     try:
         for aid in root.tk.call("after", "info"):
@@ -662,6 +662,188 @@ def run_theme_bake_tests():
         teardown_tk(root)
         del root
         gc.collect()
+
+    return failures
+
+
+def run_bili_tests(path):
+    """bili.py 的纯逻辑：wbi 签名与"该播报哪几条"。**不联网。**
+
+    为什么值得单测：签名算错时拿到的是风控码（-352），而那个码同时也是
+    "打太快"和"没有登录态"的表现 —— 从错误信息里根本分辨不出来。
+    所以这里用固定输入把签名钉死：实现一改，断言当场红。
+    """
+    failures = []
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    try:
+        import bili
+    except Exception as exc:
+        check("bili.py 能否导入", False, str(exc))
+        return failures
+
+    check("wbi 混淆表是 0..63 的一个置换",
+          sorted(bili._MIXIN_TAB) == list(range(64)))
+    k1 = bili._mixin_key("a" * 32, "b" * 32)
+    check("mixin_key 取 32 位且稳定",
+          len(k1) == 32 and k1 == bili._mixin_key("a" * 32, "b" * 32))
+    check("换一组密钥结果不同", k1 != bili._mixin_key("b" * 32, "a" * 32))
+
+    sig = bili._sign({"mid": 1, "pn": 1}, "k" * 32)
+    check("签名里带 wts 与 w_rid", "wts=" in sig and "w_rid=" in sig)
+    check("签名对参数书写顺序不敏感",
+          bili._sign({"a": 1, "b": 2}, "k" * 32) ==
+          bili._sign({"b": 2, "a": 1}, "k" * 32))
+    from urllib.parse import parse_qs
+    qs = parse_qs(bili._sign({"q": "a!b"}, "k" * 32))
+    check("签名会剔掉 !'()* 这些字符", qs.get("q") == ["ab"], repr(qs))
+
+    # 这条挡的是"顺手把头补全"：这两个头看着无害，实测会让请求被 WAF 判成
+    # 伪造（HTTP 412），而报错完全看不出是这个原因。少发是刻意的。
+    bili_src = io.open(bili.__file__, encoding="utf-8").read()
+    check("不发 Accept / Accept-Language（实测会被判成伪造请求）",
+          'add_header("Accept"' not in bili_src
+          and 'add_header("Accept-Language"' not in bili_src)
+
+    vids = [{"bvid": "B3", "title": "三", "created": 300},
+            {"bvid": "B1", "title": "一", "created": 100},
+            {"bvid": "B2", "title": "二", "created": 200}]
+    pick = live_notify.pick_fresh
+    check("首次（还没有基线）一条都不挑", pick(vids, 0) == [])
+    fresh = pick(vids, 150)
+    check("只挑出比基线新的，且从旧到新",
+          [v["bvid"] for v in fresh] == ["B2", "B3"], repr(fresh))
+    check("没有新的就返回空", pick(vids, 300) == [])
+    many = [{"bvid": "B{}".format(i), "title": "", "created": 1000 + i}
+            for i in range(8)]
+    capped = pick(many, 100)
+    check("积压超过上限时只留最新一条",
+          len(capped) == 1 and capped[0]["bvid"] == "B7", repr(capped))
+
+    # ---- load_config 的归一化：配置怎么写都得能读 ----
+    raw = json.load(io.open(path, encoding="utf-8"))
+    tmp = path + ".sub"
+    try:
+        def load_with(block, drop=False):
+            if drop:
+                raw.pop("subscribe", None)
+            else:
+                raw["subscribe"] = block
+            io.open(tmp, "w", encoding="utf-8").write(
+                json.dumps(raw, ensure_ascii=False))
+            return live_notify.load_config(tmp)
+
+        c = load_with({"enabled": True, "poll_seconds": 5,
+                       "ups": [{"mid": "123456", "note": "UID 写成字符串"}]})
+        check("UID 写成字符串也会转成数字",
+              c["subscribe"]["ups"][0]["mid"] == 123456)
+        check("轮询间隔的下限被抬到 60 秒（防的就是查太勤吃 412）",
+              c["subscribe"]["poll_seconds"] == 60.0,
+              repr(c["subscribe"]["poll_seconds"]))
+        c = load_with({"enabled": True, "ups": []})
+        check("没有 UP 主时开关被强制关掉（不留一个空转着往外发请求的开关）",
+              c["subscribe"]["enabled"] is False)
+        c = load_with(None, drop=True)
+        check("老配置（整块 subscribe 都没有）照常载入",
+              c["subscribe"]["enabled"] is False and c["subscribe"]["ups"] == [])
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+    # ---- 轮询一轮：假的 B 站客户端，不联网 ----
+    class FakeSpace:
+        def __init__(self, vids):
+            self.vids = vids
+            self.asked = []
+
+        def videos(self, mid):
+            self.asked.append(mid)
+            return list(self.vids.get(mid) or [])
+
+        def up_name(self, mid):
+            return "测试UP{}".format(mid)
+
+    def vid(bvid, created):
+        return {"bvid": bvid, "title": "标题" + bvid, "created": created,
+                "link": "https://www.bilibili.com/video/" + bvid}
+
+    sent = []
+    quiet = lambda *a: None              # noqa: E731
+    sub_cfg = {"ups": [{"mid": 42, "enabled": True, "note": ""}],
+               "at_all": False}
+    space = FakeSpace({42: [vid("B300", 300), vid("B200", 200)]})
+    state = {}
+
+    def poll():
+        return live_notify.poll_subscriptions(
+            sub_cfg, state, space,
+            lambda v, up, label: sent.append(v["bvid"]), quiet)
+
+    n, _ = poll()
+    check("第一次轮询只记基线，一条都不发", n == 0 and sent == [], repr(sent))
+    check("基线就是当前最新一条",
+          state["ups"]["42"]["last_created"] == 300, repr(state))
+    check("UP 主名字查到一次就记进状态",
+          state["ups"]["42"]["up"] == "测试UP42", repr(state))
+
+    space.vids[42] = [vid("B400", 400)] + space.vids[42]
+    n, _ = poll()
+    check("第二次轮询把新投稿发出去", n == 1 and sent == ["B400"], repr(sent))
+    check("状态推进到最新一条", state["ups"]["42"]["last_created"] == 400)
+
+    space.vids[42] = [vid("B{}".format(500 + i), 500 + i) for i in range(5)] + \
+        [vid("B400", 400)]
+    sent[:] = []
+    n, _ = poll()
+    check("一次积压太多时只发最新一条", n == 1 and sent == ["B504"], repr(sent))
+
+    off_cfg = {"ups": [{"mid": 42, "enabled": False, "note": ""}]}
+    space.asked[:] = []
+    n, _ = live_notify.poll_subscriptions(off_cfg, {}, space,
+                                          lambda *a: None, quiet)
+    check("关掉的 UP 主一个请求都不发", n == 0 and space.asked == [],
+          repr(space.asked))
+
+    class BadSpace:
+        def videos(self, mid):
+            raise bili.BiliError("HTTP 412")
+
+    n, _ = live_notify.poll_subscriptions(sub_cfg, {}, BadSpace(),
+                                          lambda *a: None, quiet)
+    check("取投稿失败只跳过，不往外抛异常", n == 0)
+
+    # 被挡之后必须退避。原实现是撞上 412 之后照原节奏接着敲 ——
+    # 实测那就是把封禁往外拖（同一来源一起拒，换 UP 主也一样）。
+    class CountingSpace:
+        def __init__(self):
+            self.asked = []
+
+        def videos(self, mid):
+            self.asked.append(mid)
+            return []
+
+    st = {}
+    t0 = 1000.0
+    n, changed = live_notify.poll_subscriptions(sub_cfg, st, BadSpace(),
+                                                lambda *a: None, quiet, now=t0)
+    check("被挡之后记下退避时刻",
+          st.get("backoff_until") == t0 + live_notify.SUB_BACKOFF_SECONDS
+          and changed, repr(st))
+    cs = CountingSpace()
+    live_notify.poll_subscriptions(sub_cfg, st, cs, lambda *a: None,
+                                   quiet, now=t0 + 60)
+    check("退避期内一个请求都不发", cs.asked == [], repr(cs.asked))
+    live_notify.poll_subscriptions(sub_cfg, st, cs, lambda *a: None,
+                                   quiet, now=t0 + live_notify.SUB_BACKOFF_SECONDS + 1)
+    check("退避结束就恢复轮询", cs.asked == [42], repr(cs.asked))
+    check("恢复之后退避标记被撤掉", "backoff_until" not in st, repr(st))
 
     return failures
 
@@ -896,10 +1078,17 @@ def run_control_auth_tests():
         _time.sleep(0.6)
         base = "http://127.0.0.1:{}".format(port)
 
+        # **本机请求也必须显式绕开系统代理。** 装了代理工具（VPN / 加速器之类）
+        # 之后 Windows 的代理例外里通常只有 `localhost.*`，**没有 `127.0.0.1`** ——
+        # 于是发往 127.0.0.1 的请求被丢给代理，这一组整组全红，而报错是
+        # "timed out"，看着像控制端口起不来。实测重启后代理一自启就复现。
+        # 产品代码一直是这么绕的（技术文档 §11.3 T9），漏的是测试这一边。
+        direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
         def call(path, headers=None):
             req = urllib.request.Request(base + path, headers=headers or {})
             try:
-                with urllib.request.urlopen(req, timeout=5) as resp:
+                with direct.open(req, timeout=5) as resp:
                     return resp.status, resp.read().decode("utf-8", "replace")
             except urllib.error.HTTPError as exc:
                 return exc.code, exc.read().decode("utf-8", "replace")
@@ -968,42 +1157,68 @@ def run_config_safety_tests(path):
 
     here = os.path.dirname(os.path.abspath(__file__))
     bad_path = os.path.join(here, "_test-badcfg.json")
-    raw = _json.load(io.open(path, encoding="utf-8-sig"))
-    raw["message"]["link"] = "https://live.bilibili.com/YOUR_ROOM_ID"
-    raw["control"] = {"enabled": True, "port": _free_port(), "token": ""}
-    raw["behavior"]["dry_run"] = True
-    raw["trigger"] = dict(raw.get("trigger") or {},
-                          on_platform_live=True, room_id=None)
-    io.open(bad_path, "w", encoding="utf-8").write(
-        _json.dumps(raw, ensure_ascii=False, indent=2))
 
-    lines = []
-    orig_log = live_notify.log
+    def capture_check(cfg_path):
+        """跑一次 check，把日志抓回来（check 靠日志说话，不靠返回值）。"""
+        lines = []
+        orig_log = live_notify.log
 
-    def spy(msg, level="INFO"):
-        lines.append(str(msg))
-        orig_log(msg, level)
+        def spy(msg, level="INFO"):
+            lines.append(str(msg))
+            orig_log(msg, level)
 
-    live_notify.log = spy
+        live_notify.log = spy
+        try:
+            live_notify.main(["check", "--config", cfg_path])
+        except SystemExit:
+            pass
+        except Exception as exc:
+            check("check 命令跑完不炸", False, "{}: {}".format(type(exc).__name__, exc))
+        finally:
+            live_notify.log = orig_log
+        return "\n".join(lines)
+
+    def run_check(mutate=None):
+        """把配置改坏、跑一次 check。mutate 用来按需再补一刀。"""
+        cfg = _json.load(io.open(path, encoding="utf-8-sig"))
+        cfg["message"]["link"] = "https://live.bilibili.com/YOUR_ROOM_ID"
+        cfg["control"] = {"enabled": True, "port": _free_port(), "token": ""}
+        cfg["behavior"]["dry_run"] = True
+        cfg["trigger"] = dict(cfg.get("trigger") or {},
+                              on_platform_live=True, room_id=None)
+        if mutate:
+            mutate(cfg)
+        io.open(bad_path, "w", encoding="utf-8").write(
+            _json.dumps(cfg, ensure_ascii=False, indent=2))
+        return capture_check(bad_path)
+
+    saved_bili = live_notify.bili
     try:
-        live_notify.main(["check", "--config", bad_path])
-    except SystemExit:
-        pass
-    except Exception as exc:
-        check("check 命令跑完不炸", False, "{}: {}".format(type(exc).__name__, exc))
+        blob = run_check()
+        check("抓到 message.link 还是示例值", "message.link 还是示例值" in blob)
+        check("抓到控制端口没设 token", "控制端口开着却没设 token" in blob)
+        check("抓到 dry_run 开着", "dry_run 开着" in blob)
+        check("抓到勾了轮询没填房间号", "却没填 room_id" in blob)
+        check("有 [6/6] 这一节", "[6/6] 配置安全检查" in blob)
+
+        # 订阅开着、却找不到 bili.py：配置看着完全正常，只有跑起来才知道这一路是死的。
+        # 打包漏文件就是这个症状，所以 check 必须说出来。
+        sub = {"enabled": True, "poll_seconds": 300,
+               "ups": [{"mid": 12345, "enabled": True, "note": "测试"}]}
+        live_notify.bili = None
+        blob_nobili = run_check(lambda c: c.__setitem__("subscribe", sub))
+        check("抓到「订阅开着却没有 bili.py」", "找不到 bili.py" in blob_nobili)
+
+        live_notify.bili = saved_bili
+        blob_sub = run_check(lambda c: c.__setitem__("subscribe", sub))
+        check("bili.py 在的时候不误报，并报出订阅已配好",
+              "UP 主订阅配好了" in blob_sub and "找不到 bili.py" not in blob_sub)
     finally:
-        live_notify.log = orig_log
+        live_notify.bili = saved_bili
         try:
             os.remove(bad_path)
         except OSError:
             pass
-
-    blob = "\n".join(lines)
-    check("抓到 message.link 还是示例值", "message.link 还是示例值" in blob)
-    check("抓到控制端口没设 token", "控制端口开着却没设 token" in blob)
-    check("抓到 dry_run 开着", "dry_run 开着" in blob)
-    check("抓到勾了轮询没填房间号", "却没填 room_id" in blob)
-    check("有 [6/6] 这一节", "[6/6] 配置安全检查" in blob)
 
     # ---- 保存路径不能吃掉界面不暴露的键 ----
     #
@@ -1030,18 +1245,9 @@ def run_config_safety_tests(path):
           "test_target" in (_cfg.get("behavior") or {}))
 
     # 不该误报的：跑一遍正常配置，这几条都不该出现
-    lines2 = []
-    live_notify.log = spy
-    try:
-        live_notify.main(["check", "--config", path])
-    except SystemExit:
-        pass
-    except Exception:
-        pass
-    finally:
-        live_notify.log = orig_log
     blob2 = "\n".join(
-        x for x in lines2 if "message.link" in x or "dry_run" in x or "room_id" in x)
+        x for x in capture_check(path).splitlines()
+        if "message.link" in x or "dry_run" in x or "room_id" in x)
     check("正常配置不误报 dry_run", "dry_run 开着" not in blob2, blob2[:100])
 
     return failures
@@ -1140,6 +1346,34 @@ def run_widget_presence_tests(path):
                   "change_templates" in (app.cfg.get("game") or {}))
             check("保存设置后 reminder.templates 还在",
                   "templates" in (app.cfg.get("reminder") or {}))
+
+            # 订阅这块的开关、名单、文案分在两个页面，保存时最容易漏掉的是
+            # 界面上压根不暴露的 at_all —— 整块替换就会把它吃掉。
+            check("设置页有订阅文案框",
+                  bool(app.txt_sub.get("1.0", "end-1c").strip()))
+            app.cfg.setdefault("subscribe", {})["at_all"] = True
+            app.cfg["subscribe"].setdefault("ups", []).append(
+                {"mid": 12345, "enabled": True, "note": "测试"})
+            app._refresh_sub_tree()
+            check("UP 主名单画得出来",
+                  app.tree_sub.get_children() == ("12345",),
+                  repr(app.tree_sub.get_children()))
+            sub_err = app._ui_to_cfg()
+            check("保存设置不丢 subscribe.at_all",
+                  not sub_err and app.cfg["subscribe"].get("at_all") is True,
+                  str(sub_err))
+            check("保存设置不丢 UP 主名单",
+                  [u["mid"] for u in app.cfg["subscribe"]["ups"]] == [12345])
+
+            # 勾了开关却没名单：load_config 会把 enabled 归一成 false，
+            # 界面却还显示勾着 —— 用户以为在订阅，其实早就关了。
+            app.cfg["subscribe"]["ups"] = []
+            app.var_sub_on.set(True)
+            sub_err = app._ui_to_cfg()
+            check("勾了开关却没名单，保存当场拦下",
+                  bool(sub_err) and "UP 主" in str(sub_err), str(sub_err))
+            app.var_sub_on.set(False)
+            app._ui_to_cfg()
     except Exception as exc:
         check("界面能否建成", False, "{}: {}".format(type(exc).__name__, exc))
     finally:
@@ -1240,9 +1474,9 @@ def main():
     results = {}
 
     for idx, (title, argv) in enumerate([
-        ("1/16  自检 check", ["check", "--config", path]),
-        ("2/15  彩排 test（不应真的发出去）", ["test", "--config", path]),
-        ("3/15  真实发送 send", ["send", "--config", path]),
+        ("1/17  自检 check", ["check", "--config", path]),
+        ("2/17  彩排 test（不应真的发出去）", ["test", "--config", path]),
+        ("3/17  真实发送 send", ["send", "--config", path]),
     ], 1):
         print("\n" + "#" * 70)
         print("# " + title)
@@ -1252,67 +1486,72 @@ def main():
     httpd.shutdown()
 
     print("\n" + "#" * 70)
-    print("# 4/16  触发引擎状态机")
+    print("# 4/17  触发引擎状态机")
     print("#" * 70)
     failures = run_engine_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 5/16  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("# 5/17  游戏识别（纯逻辑，不要求有游戏在跑）")
     print("#" * 70)
     failures += run_games_tests()
 
     print("\n" + "#" * 70)
-    print("# 6/16  群发失败重试")
+    print("# 6/17  群发失败重试")
     print("#" * 70)
     failures += run_send_retry_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 7/16  日志落盘前的密钥打码")
+    print("# 7/17  日志落盘前的密钥打码")
     print("#" * 70)
     failures += run_redact_tests()
 
     print("\n" + "#" * 70)
-    print("# 8/16  圆角抗锯齿")
+    print("# 8/17  圆角抗锯齿")
     print("#" * 70)
     failures += run_corner_tests()
 
     print("\n" + "#" * 70)
-    print("# 9/16  启动豁免期（防止鼠标误触）")
+    print("# 9/17  启动豁免期（防止鼠标误触）")
     print("#" * 70)
     failures += run_click_guard_tests()
 
     print("\n" + "#" * 70)
-    print("# 10/16  主题色不许被烤死在默认参数里")
+    print("# 10/17  主题色不许被烤死在默认参数里")
     print("#" * 70)
     failures += run_theme_bake_tests()
 
     print("\n" + "#" * 70)
-    print("# 11/16  模板占位符校验")
+    print("# 11/17  模板占位符校验")
     print("#" * 70)
     failures += run_template_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 12/16  单实例锁")
+    print("# 12/17  单实例锁")
     print("#" * 70)
     failures += run_single_instance_tests()
 
     print("\n" + "#" * 70)
-    print("# 13/16  控制端口认证")
+    print("# 13/17  控制端口认证")
     print("#" * 70)
     failures += run_control_auth_tests()
 
     print("\n" + "#" * 70)
-    print("# 14/16  配置安全检查")
+    print("# 14/17  配置安全检查")
     print("#" * 70)
     failures += run_config_safety_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 15/16  控件引用与创建必须对得上")
+    print("# 15/17  控件引用与创建必须对得上")
     print("#" * 70)
     failures += run_widget_presence_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 16/16  main() 的接线必须完整")
+    print("# 16/17  bili 订阅（配置 / 轮询 / 纯逻辑，不联网）")
+    print("#" * 70)
+    failures += run_bili_tests(path)
+
+    print("\n" + "#" * 70)
+    print("# 17/17  main() 的接线必须完整")
     print("#" * 70)
     failures += run_main_wiring_tests()
 

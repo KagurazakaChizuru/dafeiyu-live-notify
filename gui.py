@@ -348,6 +348,14 @@ TEMPLATE_LIBRARY = {
         ("简短", "🔄 换游戏了，现在打《{game}》\n{link}"),
         ("无上一局", "🎮 续上，现在打《{game}》\n{link}"),
     ],
+    "video": [
+        ("UP+标题", "🔔 {up} 更新了\n\n{title}\n{link}"),
+        ("最简", "🔔 {up} 发新视频了\n{link}"),
+        ("带书名号", "🎬 {up} 的新视频\n《{title}》\n{link}"),
+        ("吆喝", "📺 新视频出炉，来看看\n\n{title}\n{link}"),
+        ("卖惨", "🥺 新视频发了，播放量有点冷清\n\n{title}\n{link}"),
+        ("正经", "📢 {up} 投稿了新视频\n\n{title}\n{link}"),
+    ],
 }
 
 
@@ -2520,6 +2528,54 @@ class App:
                                     foreground=MUTED, font=(FONT, 9), anchor="w")
         self.lbl_process.pack(anchor="w", padx=(24, 0))
 
+        # ---------------- UP 主订阅 ----------------
+        # 跟上面四种并列，因为它是第五种**触发**：上面四种都在回答
+        # 「我的直播开始了没」，这一种是「我关注的人更新了没」。
+        self.var_sub_on = tk.BooleanVar()
+        self.var_sub_sec = tk.StringVar()
+        self.var_sub_mid = tk.StringVar()
+        self.var_sub_note = tk.StringVar()
+
+        s_outer, scard = make_card(page, "UP 主发新视频时通知　B 站投稿")
+        s_outer.pack(fill="x", pady=(14, 0))
+        check(scard, self.var_sub_on, "⑤ UP 主发新视频时通知")
+        card_hint(scard, "只播报**订阅之后**发的新视频 —— 刚加上去的时候不会把"
+                         "人家几年前的旧投稿刷进群。UID 就是空间地址里那串数字。",
+                  indent=24, pady=(2, 8))
+
+        srow = tk.Frame(scard, background=CARD)
+        srow.pack(fill="x", padx=(24, 0))
+        tk.Label(srow, text="每", background=CARD, foreground=MUTED,
+                 font=(FONT, 9)).pack(side="left")
+        ttk.Entry(srow, textvariable=self.var_sub_sec, width=6,
+                  font=(FONT, 9)).pack(side="left", padx=4)
+        tk.Label(srow, text="秒查一次（不低于 60；查太勤会被 B 站拒绝，建议 300）",
+                 background=CARD, foreground=MUTED,
+                 font=(FONT, 9)).pack(side="left")
+
+        self.tree_sub = ttk.Treeview(scard, columns=("mid", "note"),
+                                     show="headings", height=3)
+        self.tree_sub.heading("mid", text="UID")
+        self.tree_sub.heading("note", text="备注")
+        self.tree_sub.column("mid", width=140, anchor="w")
+        self.tree_sub.column("note", width=380, anchor="w", stretch=True)
+        self.tree_sub.pack(fill="x", padx=(24, 0), pady=(10, 0))
+        self.tree_sub.tag_configure("odd", background=SUNKEN)
+
+        abtn = tk.Frame(scard, background=CARD)
+        abtn.pack(fill="x", padx=(24, 0), pady=(8, 0))
+        ttk.Entry(abtn, textvariable=self.var_sub_mid, width=14,
+                  font=(FONT, 9)).pack(side="left")
+        ttk.Entry(abtn, textvariable=self.var_sub_note, width=16,
+                  font=(FONT, 9)).pack(side="left", padx=6)
+        ttk.Button(abtn, text="添加", width=8,
+                   command=self.add_sub).pack(side="left")
+        ttk.Button(abtn, text="删除选中", width=11,
+                   command=self.remove_sub).pack(side="left", padx=6)
+        self.lbl_sub_count = tk.Label(abtn, text="", background=CARD,
+                                      foreground=MUTED, font=(FONT, 9))
+        self.lbl_sub_count.pack(side="right")
+
         # ---------------- 下播提示 ----------------
         self.var_offline = tk.BooleanVar()
         self.var_offline_at = tk.BooleanVar()
@@ -2638,6 +2694,31 @@ class App:
                    "@全体成员（默认不 @ —— 没看直播的人不会关心你几点停）",
                    pady=(11, 0))
         card_hint(off, "转离线后先等 60 秒复核，期间恢复直播就取消。", pady=(7, 0))
+
+        # ---------------- UP 主新投稿的文案 ----------------
+        v_outer, vcard = make_card(page, "UP 主发新视频时的文案")
+        v_outer.pack(fill="x", pady=(12, 0))
+        card_hint(vcard, "占位符 {up} UP 主名字，{title} 视频标题，{link} 视频地址。"
+                         "多条用单独一行 --- 分隔，每次随机挑一条；"
+                         "拿不到的占位符那一整行会自动消失。",
+                  pady=(0, 8))
+        self.txt_sub = tk.Text(vcard, height=4, wrap="word", font=(FONT, 9),
+                               background=SUNKEN, foreground=TEXT,
+                               relief="flat", padx=8, pady=6,
+                               insertbackground=TEXT, borderwidth=0,
+                               highlightthickness=1,
+                               highlightbackground=BORDER,
+                               highlightcolor=PRIMARY)
+        self.txt_sub.pack(fill="x")
+        vrow = tk.Frame(vcard, background=CARD)
+        vrow.pack(fill="x", pady=(6, 0))
+        ttk.Button(vrow, text="从文案库里挑一条加进来", width=22,
+                   command=lambda: self._append_from_library("video",
+                                                             self.txt_sub)
+                   ).pack(side="left")
+        tk.Label(vrow, text="UP 主名单在「触发方式」页里加",
+                 background=CARD, foreground=MUTED,
+                 font=(FONT, 9)).pack(side="left", padx=8)
 
         g_outer, gcard = make_card(page, "游戏识别　在通知里写清楚「正在玩什么」")
         g_outer.pack(fill="x", pady=(12, 0))
@@ -3153,6 +3234,13 @@ class App:
         self.txt_offline.delete("1.0", "end")
         self.txt_offline.insert("1.0", join_templates(om))
 
+        sc = self.cfg.get("subscribe") or {}
+        self.var_sub_on.set(bool(sc.get("enabled", False)))
+        self.var_sub_sec.set(str(int(sc.get("poll_seconds", 300) or 300)))
+        self.txt_sub.delete("1.0", "end")
+        self.txt_sub.insert("1.0", join_templates(sc))
+        self._refresh_sub_tree()
+
         self._refresh_group_tree()
 
     def _ui_to_cfg(self):
@@ -3264,6 +3352,26 @@ class App:
                 "poll_seconds": old_t.get("poll_seconds", 30),
                 "platform_proxy": old_t.get("platform_proxy", ""),
             })
+            # UP 主订阅。开关和名单是两个地方，所以这里要拦一下：
+            # 勾了开关却没名单，load_config 会把 enabled 归一成 false，
+            # 界面却还显示勾着 —— 用户以为在订阅，其实早关了。
+            sub_old = self.cfg.get("subscribe") or {}
+            if self.var_sub_on.get() and not (sub_old.get("ups") or []):
+                raise ValueError("勾了「UP 主发新视频时通知」，但一个 UP 主都没加。"
+                                 "先去「触发方式」页把 UID 加上。")
+            _sblocks = split_templates(self.txt_sub.get("1.0", "end-1c"))
+            # 同 reminder/offline：就地 update。at_all 界面上不暴露，
+            # 整块替换会把它连用户的选择一起丢掉。
+            self.cfg.setdefault("subscribe", {}).update({
+                "enabled": bool(self.var_sub_on.get()),
+                "poll_seconds": num(self.var_sub_sec, "订阅轮询间隔", 60, 86400),
+                "at_all": bool(sub_old.get("at_all", False)),
+            })
+            if _sblocks:
+                self.cfg["subscribe"]["template"] = _sblocks[0]
+                self.cfg["subscribe"]["templates"] = (
+                    _sblocks if len(_sblocks) > 1 else [])
+
             # 下播文案跟开播一样是多条，用单独一行 --- 分隔。
             # 存的时候铺开成 templates 列表 + template（第一条）——
             # **两个都要写**：老版本读的是 template，新版本读的是 templates。
@@ -3374,6 +3482,58 @@ class App:
             return False
         self._refresh_group_tree()
         return True
+
+    def _refresh_sub_tree(self):
+        """重画 UP 主名单。只读 self.cfg —— 增删都是先改配置再重画。"""
+        if not self.cfg:
+            return
+        ups = (self.cfg.get("subscribe") or {}).get("ups") or []
+        self.tree_sub.delete(*self.tree_sub.get_children())
+        self.tree_sub.config(height=max(2, min(8, len(ups))))
+        for i, up in enumerate(ups):
+            self.tree_sub.insert("", "end", iid=str(up["mid"]),
+                                 tags=(("odd",) if i % 2 else ()),
+                                 values=(up["mid"],
+                                         up.get("note") or "（无备注）"))
+        self.lbl_sub_count.config(text="共 {} 个 UP 主".format(len(ups)))
+
+    def add_sub(self):
+        if not self.cfg:
+            return
+        raw = self.var_sub_mid.get().strip()
+        if not raw.isdigit():
+            messagebox.showinfo(
+                "提示", "UID 只能是数字。在 UP 主的空间地址里看：\n"
+                        "space.bilibili.com/12345678  →  12345678")
+            return
+        mid = int(raw)
+        sub = self.cfg.setdefault("subscribe", {})
+        ups = sub.setdefault("ups", [])
+        if any(int(u["mid"]) == mid for u in ups):
+            messagebox.showinfo("提示", "这个 UID 已经在名单里了。")
+            return
+        ups.append({"mid": mid, "enabled": True,
+                    "note": self.var_sub_note.get().strip()})
+        self.var_sub_mid.set("")
+        self.var_sub_note.set("")
+        # 立即落盘（跟加群一样），不用再点「保存设置」。但**不替用户勾开关**：
+        # 一个会往外发请求的功能，不该因为点了「添加」就自己跑起来。
+        self._persist()
+        self._refresh_sub_tree()
+
+    def remove_sub(self):
+        if not self.cfg:
+            return
+        sel = self.tree_sub.selection()
+        if not sel:
+            messagebox.showinfo("提示", "先在名单里选中一个 UP 主。")
+            return
+        mid = int(sel[0])
+        sub = self.cfg.setdefault("subscribe", {})
+        sub["ups"] = [u for u in (sub.get("ups") or [])
+                      if int(u["mid"]) != mid]
+        self._persist()
+        self._refresh_sub_tree()
 
     def toggle_enabled(self):
         g = self._selected_group()

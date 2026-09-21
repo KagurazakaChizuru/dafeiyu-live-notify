@@ -80,6 +80,20 @@
     "port": 8899,
     "token": ""
   },
+  "subscribe": {
+    "enabled": false,
+    "poll_seconds": 300,
+    "ups": [
+      {
+        "mid": 123456789,
+        "enabled": true,
+        "note": "改成你想订阅的 UP 主 UID"
+      }
+    ],
+    "template": "🔔 {up} 更新了\n\n{title}\n{link}",
+    "templates": [],
+    "at_all": false
+  },
   "ui": {
     "theme": "light"
   }

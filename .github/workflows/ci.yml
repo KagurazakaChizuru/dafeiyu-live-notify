@@ -45,7 +45,7 @@ jobs:
           python-version: '3.11'
 
       - name: 语法检查
-        run: python -m py_compile live_notify.py triggers.py games.py gui.py
+        run: python -m py_compile live_notify.py triggers.py games.py bili.py gui.py
 
       # 这一条比作业超时更短：真挂住时先红的是它，报出来就是「自检挂死」，
       # 而不是整个作业超时后一句含糊的「The operation was canceled」。
