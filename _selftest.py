@@ -906,6 +906,31 @@ def run_template_tests(path):
     except Exception as exc:
         check("render_text 用全白名单不炸", False, str(exc))
 
+    # ---- 内置文案池也要扫 ----
+    #
+    # 上面那些只覆盖**配置里**的模板；`TEMPLATE_POOLS` / `HOOK_POOL` 一直没人扫。
+    # 池子里写错一个占位符不会报错，只会把那半句话整行删掉 —— 群里少一句，
+    # 而 check 照样说"所有模板里的占位符都认识"。给订阅加内置池时补上这两条。
+    pool_bad = []
+    for _name, _pool in live_notify.TEMPLATE_POOLS.items():
+        for _tpl in _pool:
+            for _tok in live_notify.unknown_placeholders(_tpl):
+                pool_bad.append((_name, _tok))
+    for _tpl in (getattr(live_notify, "HOOK_POOL", None) or []):
+        for _tok in live_notify.unknown_placeholders(_tpl):
+            pool_bad.append(("hook", _tok))
+    check("内置文案池里没有不认识的占位符", not pool_bad, repr(pool_bad[:5]))
+
+    # 新投稿那 6 条要真的渲染得出东西：占位符全对、但写成空串也是坏文案
+    _cfg2 = live_notify.load_config(path)
+    _vid_out = [live_notify.render_text(
+        _cfg2, template=_t, extra={"up": "某个UP", "title": "某个标题",
+                                   "link": "https://www.bilibili.com/video/BV1"})
+        for _t in live_notify.TEMPLATE_POOLS["video"]]
+    check("内置的新投稿文案都能渲染出内容、不漏花括号",
+          all(x.strip() and "{" not in x and "}" not in x for x in _vid_out),
+          repr(_vid_out[:2]))
+
     # ---- 坏模板不该拦启动，但必须被记录 ----
     import json
     base = os.path.dirname(os.path.abspath(__file__))
