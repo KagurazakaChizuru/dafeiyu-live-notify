@@ -2856,9 +2856,16 @@ class App:
         tsv.pack(fill="x", pady=(16, 0))
         ttk.Button(tsv, text="保存设置", width=14, style="Primary.TButton",
                    command=self.save_config_clicked).pack(side="left")
+        # **这一页也得有自己的"已保存"。** 反馈那行字原来只挂在「消息与设置」页，
+        # 于是点这一页的保存按钮什么都不显示 —— 用户以为没反应（实测报过），
+        # 其实配置已经写下去了。
+        self.lbl_saved_trigger = tk.Label(tsv, text="", background=BG,
+                                          foreground=OK_COLOR,
+                                          font=(FONT, 9, "bold"))
+        self.lbl_saved_trigger.pack(side="left", padx=8)
         tk.Label(tsv, text="这一页改了也要保存（订阅开关、轮询间隔都在这一页）",
                  background=BG, foreground=MUTED,
-                 font=(FONT, 9)).pack(side="left", padx=8)
+                 font=(FONT, 9)).pack(side="left")
 
         # ---------------- 下播提示 ----------------
         self.var_offline = tk.BooleanVar()
@@ -3792,8 +3799,22 @@ class App:
         if err:
             messagebox.showerror("保存失败", err)
             return
-        self.lbl_saved.config(text="✔ 已保存")
+        self._saved_hint("✔ 已保存")
         self.root.after(2500, self._clear_saved_hint)
+
+    def _saved_hint(self, text):
+        """把「已保存」写到**两页各自的**提示位上。
+
+        两页都有保存按钮，反馈就得跟着按钮走 —— 只在另一页显示的话，
+        用户点完看不见任何变化，只会以为按钮坏了（实测踩过）。
+        """
+        for name in ("lbl_saved", "lbl_saved_trigger"):
+            lbl = getattr(self, name, None)
+            try:
+                if lbl is not None and lbl.winfo_exists():
+                    lbl.config(text=text)
+            except tk.TclError:
+                pass
 
     def _clear_saved_hint(self):
         """几秒后把「已保存 / 已设为 …」那行提示清掉。
@@ -3803,12 +3824,13 @@ class App:
         `invalid command name`，经 on_error 弹一个模态错误框 —— 实测
         「保存设置后 2.5 秒内切主题」「设完快捷键后 6 秒内切主题」都能撞到。
         """
-        lbl = getattr(self, "lbl_saved", None)
-        try:
-            if lbl is not None and lbl.winfo_exists():
-                lbl.config(text="")
-        except tk.TclError:
-            pass
+        for name in ("lbl_saved", "lbl_saved_trigger"):
+            lbl = getattr(self, name, None)
+            try:
+                if lbl is not None and lbl.winfo_exists():
+                    lbl.config(text="")
+            except tk.TclError:
+                pass
 
     # ==================================================================
     #  群管理

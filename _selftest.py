@@ -1972,6 +1972,8 @@ def run_widget_presence_tests(path):
             # 动态的开关在界面上，凭据不在（跟控制端口 token 一个口径）。
             # 所以"勾了动态却没凭据"必须当场拦下 —— 不拦就是：用户看着一切
             # 正常，实际 load_config 把动态归一成关闭，一条都不发。
+            # 保存按钮必须有看得见的反馈：两页各有按钮，反馈也得各在各页
+            # （实测报过"点了没反应"，其实配置写下去了）
             app.var_chat_cool.set("15")
             app.var_chat_on.set(False)
             _chat_err = app._ui_to_cfg()
@@ -1979,6 +1981,16 @@ def run_widget_presence_tests(path):
                   not _chat_err and app.cfg["chat"]["cooldown_seconds"] == 15,
                   repr((_chat_err, (app.cfg.get("chat") or {}).get("cooldown_seconds"))))
             check("群聊卡上的「试一句」按钮在", hasattr(app, "lbl_chat_test"))
+
+            # 点保存之后，**两页各自的提示位**都要显示"已保存" ——
+            # 只在另一页显示的话，用户点完看不见变化，会以为按钮坏了
+            app.save_config_clicked()
+            root.update()
+            check("保存后两页都显示「已保存」（点了不是没反应）",
+                  "已保存" in app.lbl_saved.cget("text")
+                  and "已保存" in app.lbl_saved_trigger.cget("text"),
+                  repr((app.lbl_saved.cget("text"),
+                        app.lbl_saved_trigger.cget("text"))))
 
             # 日志：**批着插**。逐行插是实测出来的卡顿源（300 行 2092 ms，
             # 批量 13 ms，差 166 倍）—— 这条挡的是"哪天又改回逐行"。
