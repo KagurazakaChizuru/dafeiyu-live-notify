@@ -408,6 +408,7 @@ class Space:
                 "text": _dyn_text(it),
                 "type": str(it.get("type") or ""),
                 "link": "https://t.bilibili.com/" + dyn_id,
+                "cover": _dyn_cover(it),
             })
         out.sort(key=lambda x: x["created"])
         return out
@@ -464,6 +465,38 @@ def _dyn_major_title(md):
         if val:
             return val
     return ""
+
+
+def _dyn_cover(item):
+    """动态的封面图地址。取不到返回空串（那就不带图）。
+
+    位置随类型变，都是实测的：
+      图文（MAJOR_TYPE_OPUS / DRAW）→ major.opus.pics[0].url / draw.items[0].src
+      投稿（MAJOR_TYPE_ARCHIVE）    → major.archive.cover
+      转发                          → 自己这层是空的，得去 orig 里找
+    """
+    def from_major(md):
+        major = (md or {}).get("major") or {}
+        arch = major.get("archive") or {}
+        if arch.get("cover"):
+            return str(arch["cover"]).strip()
+        opus = major.get("opus") or {}
+        for pic in (opus.get("pics") or []):
+            if pic.get("url"):
+                return str(pic["url"]).strip()
+        draw = major.get("draw") or {}
+        for pic in (draw.get("items") or []):
+            if pic.get("src"):
+                return str(pic["src"]).strip()
+        common = major.get("common") or {}
+        if common.get("cover"):
+            return str(common["cover"]).strip()
+        return ""
+
+    md = ((item.get("modules") or {}).get("module_dynamic") or {})
+    orig = item.get("orig") if isinstance(item.get("orig"), dict) else {}
+    omd = ((orig.get("modules") or {}).get("module_dynamic") or {})
+    return from_major(md) or from_major(omd)
 
 
 def _dyn_text(item):
