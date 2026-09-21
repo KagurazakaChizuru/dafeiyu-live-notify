@@ -2753,15 +2753,12 @@ class App:
                          "几年前的旧东西刷进群。UID 就是空间地址里那串数字。",
                   indent=24, pady=(2, 4))
         check(scard, self.var_sub_dyn, "也通知动态（转发、图文、说说那种）", bold=False)
-        card_hint(scard, "动态接口**匿名读不到**（实测，B站官方号也一样），"
-                         "得先登录一次；开了动态之后，投稿类动态会自动跳过，"
-                         "不会同一个视频报两遍。",
+        card_hint(scard, "只播报订阅之后发的；投稿类动态不重复播。",
                   indent=24, pady=(2, 4))
 
         self.var_sub_cover = tk.BooleanVar()
         check(scard, self.var_sub_cover, "播报带一张小封面", bold=False)
-        card_hint(scard, "用 B站图床自己的缩放参数取小图（原图 250 KB → 缩略图 5 KB），"
-                         "不下载、不占带宽。尺寸见配置里的 subscribe.cover_size。",
+        card_hint(scard, "B站图床直接切小图（320×180），不占带宽。",
                   indent=24, pady=(2, 8))
 
         lrow = tk.Frame(scard, background=CARD)
@@ -2812,10 +2809,8 @@ class App:
         c_outer, ccard = make_card(page, "群友 @机器人 可以和 AI 聊天")
         c_outer.pack(fill="x", pady=(14, 0))
         check(ccard, self.var_chat_on, "① 允许群友 @机器人 聊天")
-        card_hint(ccard, "走 DSH 的 **groupchat** 档案 —— 那个档案里所有工具插件"
-                         "都禁掉了，它手里没有任何能动手的东西（不是靠嘱咐它"
-                         "别乱来，是**根本没有工具**）。\n"
-                         "顺便能记提醒：群友说「@我 提醒我 21:30 交作业」就行。",
+        card_hint(ccard, "只聊天，没有工具权限；群友说「@我 提醒我 21:30 交作业」"
+                         "也能记提醒。",
                   indent=24, pady=(2, 8))
 
         self.var_chat_backend = tk.StringVar()
@@ -2951,11 +2946,8 @@ class App:
         toggle_row(off, self.var_offline,
                    "下播时也发一条（依赖「触发方式」页里的「直播间开播时通知」）",
                    font=(FONT, 10, "bold"))
-        card_hint(off, "占位符 {duration} 本次时长，{peak} 人气峰值，{game} 最后的游戏，"
-                    "{tod} 时段（早上/下午/深夜…）。**别写死「今晚」这类词** —— "
-                    "早上下播就成了笑话，用 {tod} 让程序填。"
-                       "拿不到的就不写这一行。"
-                       "含它的那一整行会自动消失。",
+        card_hint(off, "占位符 {duration} 时长、{peak} 峰值、{game} 游戏、"
+                       "{tod} 时段；别写死「今晚」。",
                   indent=24, pady=(3, 8))
         # **多行框，跟开播那边对等。** 原来这里是个单行 Entry ——
         # 连第二条文案都存不下，更别说挑着发。现在能存多条，
@@ -3228,11 +3220,7 @@ class App:
                    command=lambda: self.send_test_private("dynamic")).pack(
                        side="left", padx=(6, 0))
         card_hint(tcard,
-                  "**真的会发出去，但只发到这个 QQ，不进任何群。**\n"
-                  "填你自己的号，别填机器人的号 —— QQ 一般不允许给自己发私聊。\n"
-                  "时长、峰值、UP 主名字、动态正文都是编的，只为看格式和文案。\n"
-                  "新投稿 / 新动态这两条会带一张示例图（程序自带的），"
-                  "真通知里那个位置是对方的封面。",
+                  "真的会发，但只发到这个 QQ，不进群；内容是编的。",
                   indent=0, pady=(6, 0))
 
         # ---------------- 保存 ----------------
