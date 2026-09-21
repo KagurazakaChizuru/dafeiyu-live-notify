@@ -130,6 +130,16 @@ try {
     # straight past a name check. Match the shape as well.
     $strayPrivate = Get-ChildItem $pkgApp -Recurse -File -Filter '_privacy*' -ErrorAction SilentlyContinue
     if ($strayPrivate) { $bad += ($strayPrivate | ForEach-Object { $_.Name }) }
+    # Same reasoning for the login cookie (subscribe.sessdata). config.json is
+    # deny-listed, but a hand-made copy ("config - copy.json") would sail past
+    # a name check - and that file is a live Bilibili credential, not a preference.
+    # Match a FILLED value only: the bare key name also appears in
+    # config.example.json, and a case-insensitive match on "sessdata" would
+    # refuse to package the example - which it did, once.
+    $sessShape = '("sessdata"\s*:\s*"[^"]{8,}"|SESSDATA%3D|SESSDATA=[A-Za-z0-9%])'
+    $straySess = Get-ChildItem $pkgApp -Recurse -File -Include '*.json', '*.txt' -ErrorAction SilentlyContinue |
+        Where-Object { (Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue) -cmatch $sessShape }
+    if ($straySess) { $bad += ($straySess | ForEach-Object { $_.Name + ' (contains SESSDATA)' }) }
     if ($bad.Count -gt 0) {
         throw ("refusing to package - these must not ship: " + ($bad -join ', '))
     }

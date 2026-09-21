@@ -90,8 +90,12 @@
         "note": "改成你想订阅的 UP 主 UID"
       }
     ],
-    "template": "🔔 {up} 更新了\n\n{title}\n{link}",
+    "template": "🔔 {up} 更新了，去看看\n\n{title}\n{link}",
     "templates": [],
+    "dynamics": false,
+    "dyn_template": "💬 {up} 发了条动态\n\n{text}\n{link}",
+    "dyn_templates": [],
+    "sessdata": "",
     "at_all": false
   },
   "ui": {

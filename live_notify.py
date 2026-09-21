@@ -229,12 +229,30 @@ TEMPLATE_POOLS = {
     # 必要成分里。{up} 取不到时是空串，那一行会被整行删掉；整条被删空时
     # render_text 会退回未删行的版本，绝不会发出空消息。
     "video": [
-        "🔔 {up} 更新了\n\n{title}\n{link}",
-        "📺 有新视频了\n\n{title}\n{up}\n{link}",
-        "🔔 蹲到了，{up} 发新视频\n\n{title}\n{link}",
-        "📼 新的一期\n\n{title}\n{link}",
-        "🔔 更新提醒\n\n{title}\n{link}",
-        "📺 {up} 那边有新东西\n\n{title}\n{link}",
+        "🔔 {up} 更新了，去看看\n\n{title}\n{link}",
+        "🆕 新片出锅\n\n{up} · {title}\n{link}",
+        "🍿 有新的了，进来坐会儿\n\n{title}\n{link}",
+        "📺 {up} 发新视频了\n\n{title}\n{link}",
+        "👀 别刷了，看这个\n\n{title}\n{link}",
+        "🔥 {up} 刚更新\n\n{title}\n{link}",
+        "🎬 新片\n\n{up} · {title}\n{link}",
+        "📼 新的一期上了\n\n{title}\n{up}\n{link}",
+        "✨ {up} 那边有好东西\n\n{title}\n{link}",
+        "🎞 更新了，趁热看\n\n{title}\n{link}",
+        "📢 投稿提醒\n\n{up} · {title}\n{link}",
+        "🆕 {title}\n\n{up} 的新片\n{link}",
+    ],
+    # 动态。文案跟投稿分开写：动态常常只有一句话，用「新片」「这期」那套
+    # 措辞会驴唇不对马嘴。{text} 取不到时那一行整行消失（在 DROP_LINE 里）。
+    "dynamic": [
+        "💬 {up} 发了条动态\n\n{text}\n{link}",
+        "📣 {up} 冒泡了\n\n{text}\n{link}",
+        "👀 {up} 刚说话\n\n{text}\n{link}",
+        "💭 动态更新 · {up}\n\n{text}\n{link}",
+        "🔔 {up} 发了新动态\n\n{text}\n{link}",
+        "🫧 {up} 那边有新动静\n\n{text}\n{link}",
+        "📝 {up}：\n\n{text}\n{link}",
+        "💬 快看，{up} 更新动态了\n\n{text}\n{link}",
     ],
 }
 
@@ -331,6 +349,28 @@ def _time_pools(kind, now=None):
     return [TEMPLATE_POOLS[x] for x in names if x in TEMPLATE_POOLS]
 
 
+#: 投稿类动态。它跟 arc/search 拿到的是**同一件事** —— 两个都播报，同一个
+#: 视频就会在群里出现两遍。所以动态那一路按 type 把它跳过。
+DYN_TYPE_AV = getattr(bili, "DYN_TYPE_AV", "DYNAMIC_TYPE_AV") if bili else "DYNAMIC_TYPE_AV"
+
+
+def clip_text(text, limit=140):
+    """把动态正文截短到一条群消息该有的长度。
+
+    动态可以是一整篇长文。原样塞进群里，一条消息能刷满一屏 —— 而且群里
+    没人会为了一条推送读完它，点进去才是目的。所以：能在标点处断就在标点处断。
+    """
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    for mark in ("。", "！", "？", "…", "，", "；", ".", "!", "?"):
+        pos = cut.rfind(mark)
+        if pos >= limit // 2:
+            return cut[:pos + 1]
+    return cut + "…"
+
+
 def pick_from(pool, fallback="", kind="", avoid=()):
     """从文案池里随机挑一条。池子空了才退回 fallback。
 
@@ -391,6 +431,10 @@ _log_file_path = None
 # 控制端口 token —— 那等价于「谁拿到谁就能操作」。界面面板是本机的，
 # 用户需要在那里看到完整地址以便复制，所以保持原样。
 _SECRET_PATTERNS = (
+    # SESSDATA 是**能直接拿去登录的**账号凭据，比控制端口 token 严重得多。
+    # 它可能出现在异常串、配置回显、curl 示例里 —— 都得挡住。
+    # 值里会有 % 转义（URL 编码），所以字符类比 token 多一个 %。
+    re.compile(r"((?:SESSDATA|sessdata)\s*[=:：]\s*)([A-Za-z0-9_\-\.%]{8,})"),
     re.compile(r"((?:token|Token|TOKEN)\s*[=:：]\s*)([A-Za-z0-9_\-\.]{12,})"),
     re.compile(r"((?:access_token)\"?\s*[=:]\s*\"?)([A-Za-z0-9_\-\.]{12,})"),
 )
@@ -795,6 +839,19 @@ def load_config(path):
                      or _own_first(subscribe.get("template"), TEMPLATE_POOLS["video"]),
         "at_all": _as_bool(subscribe.get("at_all", False), False),
         "ups": ups,
+        # 动态。**默认关**，而且没有 SESSDATA 就等于关 —— 实测匿名读不到
+        # 动态（接口回 -352，或者回 code=0 但 items 是空的；B站官方号也一样）。
+        # 留一个"空转着往外发请求、每次都失败"的开关没有意义。
+        "dynamics": (_as_bool(subscribe.get("dynamics", False), False)
+                     and bool(str(subscribe.get("sessdata") or "").strip())),
+        "dyn_template": str(subscribe.get("dyn_template")
+                            or TEMPLATE_POOLS["dynamic"][0]),
+        "dyn_templates": [str(x) for x in (subscribe.get("dyn_templates") or [])
+                          if str(x).strip()]
+                         or _own_first(subscribe.get("dyn_template"),
+                                       TEMPLATE_POOLS["dynamic"]),
+        # 登录态。**不要**放进日志、不要出现在打包产物里（见 _package.ps1）。
+        "sessdata": str(subscribe.get("sessdata") or ""),
     }
 
     # --- 模板占位符校验（不报错，只记下来给 check 看）---
@@ -1148,7 +1205,8 @@ def pick_template(cfg, template=None):
 #: 而不是渲染成「正在玩《》」这种残缺的句子。
 # room_title / room_desc 也要列进来：接口偶尔抽风取不到时，模板里那一行
 # 应该整个消失，而不是留一个空行 —— 上一版漏了它们，实测就是这样。
-DROP_LINE_WHEN_EMPTY = ("game", "peak", "room_title", "room_desc", "title", "up")
+DROP_LINE_WHEN_EMPTY = ("game", "peak", "room_title", "room_desc", "title",
+                        "up", "text")
 
 
 #: 模板里允许出现的占位符。
@@ -1171,6 +1229,8 @@ ALLOWED_PLACEHOLDERS = frozenset({
     "room_desc",
     # 订阅的 UP 主名字（新投稿播报用）。取不到时是空串，那几行会被整行删掉。
     "up",
+    # 动态正文（新动态播报用）。长文会被 clip_text 截断，取不到时整行删掉。
+    "text",
 })
 
 #: 匹配一对花括号里的内容。不要求里面合法 —— 畸形的也要能抓出来。
@@ -1241,6 +1301,8 @@ TEMPLATE_SLOTS = (
     ("game", "change_templates", "换游戏文案"),
     ("subscribe", "template", "新投稿文案"),
     ("subscribe", "templates", "新投稿文案"),
+    ("subscribe", "dyn_template", "新动态文案"),
+    ("subscribe", "dyn_templates", "新动态文案"),
 )
 
 
@@ -1293,6 +1355,7 @@ def render_text(cfg, template=None, extra=None):
         "duration": "",
         # 订阅播报用；普通消息里它没值，写了 {up} 的那行会被删掉
         "up": "",
+        "text": "",
     }
     # 时段词在**这一刻**取，不是配置加载时 —— 程序会挂着跨过深夜。
     _tod, _wd = time_words()
@@ -1393,6 +1456,14 @@ def preview_messages(cfg, samples=None):
                                kind="video"),
             extra={"up": "某位 UP 主", "title": "这期的标题大概长这样",
                    "link": "https://www.bilibili.com/video/BV1xx411c7mD"})))
+    if sub_cfg.get("enabled") and sub_cfg.get("dynamics"):
+        items.append(("新动态", render_text(
+            cfg,
+            template=pick_from(sub_cfg.get("dyn_templates"),
+                               sub_cfg.get("dyn_template"), kind="dynamic"),
+            extra={"up": "某位 UP 主",
+                   "text": "今天这条动态大概写这么长，超出去会被截断在标点处",
+                   "link": "https://t.bilibili.com/1234567890123456789"})))
 
     return items
 
@@ -1403,8 +1474,18 @@ def preview_messages(cfg, samples=None):
 SUB_BACKOFF_SECONDS = 900
 
 
+def _up_name_of(space, mid):
+    """UP 主显示名。取不到就是空串 —— 它只给文案里的 {up} 用，不该因此不播报。"""
+    try:
+        return str(space.up_name(mid) or "")
+    except Exception:
+        return ""
+
+
 def poll_subscriptions(subscribe_cfg, state, space, announce, log=None, now=None):
-    """扫一遍订阅的 UP 主，该播报的交给 announce(video, up_name, label)。
+    """扫一遍订阅的 UP 主，该播报的交给 announce(item, up_name, label, kind)。
+
+    kind 是 "video"（新投稿）或 "dynamic"（新动态）—— 调用方据此挑文案。
 
     抽成模块级函数是为了能单测 —— 它最要紧的两条纪律都只在**第二次轮询**
     才体现，留在闭包里试不出来：
@@ -1412,9 +1493,13 @@ def poll_subscriptions(subscribe_cfg, state, space, announce, log=None, now=None
         几年的旧投稿刷进群里）；
       · 按**发布时间**比对，不按"在列表里的位置"（列表随翻页滚动）。
 
-    取投稿失败只跳过这一个 UP 主，不往外抛 —— 一个 UP 主取不到不该让整轮
-    停摆（跟群发失败重试那边同一个考虑）。但**会记下退避时刻**：被挡之后
-    按原节奏接着敲，等于把封禁往外拖。
+    取失败只跳过这一个 UP 主，不往外抛 —— 一个 UP 主取不到不该让整轮停摆
+    （跟群发失败重试那边同一个考虑）。但**会记下退避时刻**：被挡之后按原
+    节奏接着敲，等于把封禁往外拖。
+
+    动态那一路只在开了 `dynamics` 时走，并且**跳过投稿类动态**
+    （`DYN_TYPE_AV`）—— 它跟 arc/search 拿到的是同一件事，不跳就会为同一个
+    视频播报两次。两条路的基线分开记（`last_created` / `last_dyn_created`）。
 
     `now` 只是给测试用的注入口，正常运行不传。
     返回 (播报条数, 状态是否有变化)。
@@ -1435,58 +1520,89 @@ def poll_subscriptions(subscribe_cfg, state, space, announce, log=None, now=None
     if not ups:
         return 0, False
 
+    want_dyn = bool(subscribe_cfg.get("dynamics"))
+    sessdata = str(subscribe_cfg.get("sessdata") or "")
     seen = state.setdefault("ups", {})
     announced = 0
     changed = False
+
+    def sweep(items, last, what, label, name, kind):
+        """挑出该播报的、交给 announce，返回 (播报条数, 新基线)。"""
+        newest = max(int(x.get("created") or 0) for x in items)
+        if not last:
+            say("订阅 {}：第一次见到，记下当前最新一条，不补发{}历史。".format(
+                label, what))
+            return 0, newest
+        backlog = len([x for x in items if int(x.get("created") or 0) > last])
+        fresh = pick_fresh(items, last)
+        if len(fresh) < backlog:
+            say("订阅 {}：{}积压 {} 条，只播报最新一条。".format(
+                label, what, backlog), "WARN")
+        count = 0
+        for x in fresh:
+            try:
+                announce(x, name, label, kind)
+                count += 1
+            except Exception as exc:
+                say("{}播报出错：{}".format(what, exc), "ERROR")
+        return count, max(last, newest)
+
     for up in ups:
         mid = up["mid"]
         key = str(mid)
-        try:
-            vids = space.videos(mid)
-        except Exception as exc:           # 网络/风控/解析，一律只跳过这一个
-            say("订阅 {} 取投稿失败：{}（退避 {} 分钟再试）".format(
-                up.get("note") or mid, exc, SUB_BACKOFF_SECONDS // 60), "WARN")
-            state["backoff_until"] = now + SUB_BACKOFF_SECONDS
-            state["backoff_reason"] = str(exc)
-            changed = True
-            continue
-        if state.pop("backoff_until", None) is not None:
-            # 通了就把退避撤掉，否则要等满 15 分钟才恢复正常节奏
-            state.pop("backoff_reason", None)
-            changed = True
-        if not vids:
-            continue
-        newest = max(int(v.get("created") or 0) for v in vids)
-        rec = seen.get(key) or {}
-        last = int(rec.get("last_created") or 0)
+        rec = dict(seen.get(key) or {})
         name = str(rec.get("up") or "")
-        if not name:
-            # 名字只是给文案里 {up} 用的，取不到就算了，不该因此不播报
-            try:
-                name = str(space.up_name(mid) or "")
-            except Exception:
-                name = ""
         label = up.get("note") or name or str(mid)
+        failed = False
 
-        if not last:
-            say("订阅 {}：第一次见到，记下当前最新一条，不补发历史。".format(label))
-        else:
-            backlog = len([v for v in vids
-                           if int(v.get("created") or 0) > last])
-            fresh = pick_fresh(vids, last)
-            if len(fresh) < backlog:
-                say("订阅 {}：积压 {} 条，只播报最新一条。".format(label, backlog),
-                    "WARN")
-            for v in fresh:
-                try:
-                    announce(v, name, label)
-                    announced += 1
-                except Exception as exc:
-                    say("新投稿播报出错：{}".format(exc), "ERROR")
+        def fetch(fn, what):
+            """取一批。失败只跳过这一个 UP 主，并记退避。返回列表或 None。"""
+            nonlocal failed
+            try:
+                return fn()
+            except Exception as exc:       # 网络/风控/凭据/解析，一律只跳过
+                say("订阅 {} 取{}失败：{}（退避 {} 分钟再试）".format(
+                    label, what, exc, SUB_BACKOFF_SECONDS // 60), "WARN")
+                state["backoff_until"] = now + SUB_BACKOFF_SECONDS
+                state["backoff_reason"] = str(exc)
+                failed = True
+                return None
 
-        fresh_rec = {"last_created": max(last, newest), "up": name}
-        if seen.get(key) != fresh_rec:
-            seen[key] = fresh_rec
+        # 名字只取一次（取到就存在状态里）。放在取投稿之前，是因为动态那一路
+        # 也要用它 —— 一个 UP 主只有动态、没有投稿时，{up} 也得有值。
+        if not name:
+            name = _up_name_of(space, mid)
+            label = up.get("note") or name or str(mid)
+
+        vids = fetch(lambda: space.videos(mid), "投稿")
+        if vids is not None:
+            if state.pop("backoff_until", None) is not None:
+                # 通了就把退避撤掉，否则要等满 15 分钟才恢复正常节奏
+                state.pop("backoff_reason", None)
+                changed = True
+            if vids:
+                count, rec["last_created"] = sweep(
+                    vids, int(rec.get("last_created") or 0), "投稿",
+                    label, name, "video")
+                announced += count
+
+        if want_dyn and not failed:
+            dyns = fetch(lambda: space.dynamics(mid, sessdata), "动态")
+            if dyns is not None:
+                # 投稿类动态跟 arc/search 是同一件事，跳过（否则同一视频发两遍）
+                dyns = [d for d in dyns
+                        if str(d.get("type") or "") != DYN_TYPE_AV]
+                if dyns:
+                    count, rec["last_dyn_created"] = sweep(
+                        dyns, int(rec.get("last_dyn_created") or 0), "动态",
+                        label, name, "dynamic")
+                    announced += count
+
+        rec["up"] = name
+        if seen.get(key) != rec:
+            seen[key] = rec
+            changed = True
+        if failed:
             changed = True
     return announced, changed
 
@@ -2346,16 +2462,29 @@ def cmd_watch(cfg, stop_event=None):
             sub_space[0] = bili.Space()      # 懒建：没订阅就不该去连 B 站
         state = _load_sub_state()
 
-        def announce(video, up_name, label):
-            log("订阅更新：{} 发了《{}》".format(label, video["title"]))
+        def announce(item, up_name, label, kind):
+            if kind == "dynamic":
+                log("订阅更新：{} 发了条动态".format(label))
+                send_to_groups(
+                    cfg, onebot,
+                    "订阅的 UP 主发了条动态",
+                    template=pick_from(subscribe_cfg.get("dyn_templates"),
+                                       subscribe_cfg.get("dyn_template"),
+                                       kind="dynamic"),
+                    extra_fields={"up": up_name,
+                                  "text": clip_text(item.get("text")),
+                                  "link": item["link"]},
+                    at_all=bool(subscribe_cfg.get("at_all", False)))
+                return
+            log("订阅更新：{} 发了《{}》".format(label, item["title"]))
             send_to_groups(
                 cfg, onebot,
-                "订阅的 UP 主发了新投稿：{}".format(video["title"]),
+                "订阅的 UP 主发了新投稿：{}".format(item["title"]),
                 template=pick_from(subscribe_cfg.get("templates"),
                                    subscribe_cfg.get("template"),
                                    kind="video"),
-                extra_fields={"up": up_name, "title": video["title"],
-                              "link": video["link"]},
+                extra_fields={"up": up_name, "title": item["title"],
+                              "link": item["link"]},
                 at_all=bool(subscribe_cfg.get("at_all", False)))
 
         _, changed = poll_subscriptions(subscribe_cfg, state, sub_space[0],
@@ -2525,6 +2654,13 @@ def cmd_watch(cfg, stop_event=None):
         log("订阅新投稿：{} 个 UP，每 {} 秒查一次（B站公开接口）".format(
             len([u for u in subscribe_cfg["ups"] if u.get("enabled")]),
             int(subscribe_cfg["poll_seconds"])))
+        if subscribe_cfg.get("dynamics"):
+            log("订阅新动态：也开着（只播报订阅之后发的，投稿类动态自动跳过）")
+        elif str(subscribe_cfg.get("sessdata") or "").strip():
+            log("订阅新动态：关着（要开就在配置里把 subscribe.dynamics 设成 true）")
+        else:
+            log("订阅新动态：关着（动态接口要登录态，配置里没有 subscribe.sessdata）",
+                "WARN")
     if cfg["behavior"]["dry_run"]:
         log("当前是彩排模式（dry_run=true），不会真的发消息。", "WARN")
     log("=" * 62)
@@ -2810,6 +2946,15 @@ def cmd_check(cfg):
         log("  [OK] UP 主订阅配好了（{} 个，每 {} 秒查一次）。".format(
             len([u for u in sub.get("ups") or [] if u.get("enabled")]),
             int(sub.get("poll_seconds") or 300)))
+        if sub.get("dynamics"):
+            log("  [OK] 新动态也开着。")
+        elif not str(sub.get("sessdata") or "").strip():
+            # 不是报错：动态本来就要登录态，默认就是关的。但用户要是以为
+            # "订阅了就都会通知"，这一句能省掉一轮排查。
+            log("  [-] 新动态没开：动态接口要登录态（实测匿名读不到），"
+                "配置里的 subscribe.sessdata 是空的。")
+        else:
+            log("  [-] 新动态没开（订阅只管投稿）。")
     else:
         log("  [-] 没开 UP 主订阅。")
 

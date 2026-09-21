@@ -349,12 +349,22 @@ TEMPLATE_LIBRARY = {
         ("无上一局", "🎮 续上，现在打《{game}》\n{link}"),
     ],
     "video": [
-        ("UP+标题", "🔔 {up} 更新了\n\n{title}\n{link}"),
-        ("最简", "🔔 {up} 发新视频了\n{link}"),
-        ("带书名号", "🎬 {up} 的新视频\n《{title}》\n{link}"),
-        ("吆喝", "📺 新视频出炉，来看看\n\n{title}\n{link}"),
-        ("卖惨", "🥺 新视频发了，播放量有点冷清\n\n{title}\n{link}"),
-        ("正经", "📢 {up} 投稿了新视频\n\n{title}\n{link}"),
+        ("更新了", "🔔 {up} 更新了，去看看\n\n{title}\n{link}"),
+        ("新片出锅", "🆕 新片出锅\n\n{up} · {title}\n{link}"),
+        ("进来坐会儿", "🍿 有新的了，进来坐会儿\n\n{title}\n{link}"),
+        ("别刷了", "👀 别刷了，看这个\n\n{title}\n{link}"),
+        ("刚更新", "🔥 {up} 刚更新\n\n{title}\n{link}"),
+        ("新的一期", "📼 新的一期上了\n\n{title}\n{up}\n{link}"),
+        ("趁热看", "🎞 更新了，趁热看\n\n{title}\n{link}"),
+        ("最简", "📢 投稿提醒\n\n{up} · {title}\n{link}"),
+    ],
+    "dynamic": [
+        ("发了条动态", "💬 {up} 发了条动态\n\n{text}\n{link}"),
+        ("冒泡了", "📣 {up} 冒泡了\n\n{text}\n{link}"),
+        ("刚说话", "👀 {up} 刚说话\n\n{text}\n{link}"),
+        ("有新动静", "🫧 {up} 那边有新动静\n\n{text}\n{link}"),
+        ("冒号式", "📝 {up}：\n\n{text}\n{link}"),
+        ("催一下", "💬 快看，{up} 更新动态了\n\n{text}\n{link}"),
     ],
 }
 
@@ -2532,15 +2542,21 @@ class App:
         # 跟上面四种并列，因为它是第五种**触发**：上面四种都在回答
         # 「我的直播开始了没」，这一种是「我关注的人更新了没」。
         self.var_sub_on = tk.BooleanVar()
+        self.var_sub_dyn = tk.BooleanVar()
         self.var_sub_sec = tk.StringVar()
         self.var_sub_mid = tk.StringVar()
         self.var_sub_note = tk.StringVar()
 
-        s_outer, scard = make_card(page, "UP 主发新视频时通知　B 站投稿")
+        s_outer, scard = make_card(page, "UP 主发新视频 / 新动态时通知")
         s_outer.pack(fill="x", pady=(14, 0))
         check(scard, self.var_sub_on, "⑤ UP 主发新视频时通知")
-        card_hint(scard, "只播报**订阅之后**发的新视频 —— 刚加上去的时候不会把"
-                         "人家几年前的旧投稿刷进群。UID 就是空间地址里那串数字。",
+        card_hint(scard, "只播报**订阅之后**发的 —— 刚加上去的时候不会把人家"
+                         "几年前的旧东西刷进群。UID 就是空间地址里那串数字。",
+                  indent=24, pady=(2, 4))
+        check(scard, self.var_sub_dyn, "也通知动态（转发、图文、说说那种）", bold=False)
+        card_hint(scard, "动态接口**匿名读不到**（实测，B站官方号也一样），"
+                         "要先在配置文件的 subscribe.sessdata 里填登录态。"
+                         "开了动态之后，投稿类动态会自动跳过，不会同一个视频报两遍。",
                   indent=24, pady=(2, 8))
 
         srow = tk.Frame(scard, background=CARD)
@@ -2720,6 +2736,32 @@ class App:
                  background=CARD, foreground=MUTED,
                  font=(FONT, 9)).pack(side="left", padx=8)
 
+        # ---------------- UP 主新动态的文案 ----------------
+        # 跟投稿分开写：动态常常只有一句话，用「新片」「这期」那套措辞会
+        # 驴唇不对马嘴。
+        d_outer, dcard = make_card(page, "UP 主发新动态时的文案")
+        d_outer.pack(fill="x", pady=(12, 0))
+        card_hint(dcard, "占位符 {up} UP 主名字，{text} 动态正文（太长会截断在标点处），"
+                         "{link} 动态地址。多条用单独一行 --- 分隔。",
+                  pady=(0, 8))
+        self.txt_dyn = tk.Text(dcard, height=4, wrap="word", font=(FONT, 9),
+                               background=SUNKEN, foreground=TEXT,
+                               relief="flat", padx=8, pady=6,
+                               insertbackground=TEXT, borderwidth=0,
+                               highlightthickness=1,
+                               highlightbackground=BORDER,
+                               highlightcolor=PRIMARY)
+        self.txt_dyn.pack(fill="x")
+        drow = tk.Frame(dcard, background=CARD)
+        drow.pack(fill="x", pady=(6, 0))
+        ttk.Button(drow, text="从文案库里挑一条加进来", width=22,
+                   command=lambda: self._append_from_library("dynamic",
+                                                             self.txt_dyn)
+                   ).pack(side="left")
+        tk.Label(drow, text="没开动态也不影响：这段文案先存着",
+                 background=CARD, foreground=MUTED,
+                 font=(FONT, 9)).pack(side="left", padx=8)
+
         g_outer, gcard = make_card(page, "游戏识别　在通知里写清楚「正在玩什么」")
         g_outer.pack(fill="x", pady=(12, 0))
 
@@ -2887,7 +2929,8 @@ class App:
         trow.pack(fill="x", pady=(2, 0))
         ttk.Button(trow, text="预览将发送的内容", width=20,
                    command=self.preview_messages).pack(side="left")
-        card_hint(tcard, "只渲染给你看，**一条都不会发出去**。四种消息各来一条。",
+        card_hint(tcard, "只渲染给你看，**一条都不会发出去**。开了哪几类就列哪几类；"
+                         "窗口里可以「换一批」，把池子里的文案多翻几句看看。",
                   indent=0, pady=(6, 0))
 
         trow2 = tk.Frame(tcard, background=CARD)
@@ -2903,10 +2946,16 @@ class App:
         ttk.Button(trow2, text="私聊发下播", width=13,
                    command=lambda: self.send_test_private("offline")).pack(
                        side="left", padx=(6, 0))
+        ttk.Button(trow2, text="私聊发新投稿", width=15,
+                   command=lambda: self.send_test_private("video")).pack(
+                       side="left", padx=(6, 0))
+        ttk.Button(trow2, text="私聊发新动态", width=15,
+                   command=lambda: self.send_test_private("dynamic")).pack(
+                       side="left", padx=(6, 0))
         card_hint(tcard,
                   "**真的会发出去，但只发到这个 QQ，不进任何群。**\n"
                   "填你自己的号，别填机器人的号 —— QQ 一般不允许给自己发私聊。\n"
-                  "下播那条里的时长和峰值是编的，只为看格式。",
+                  "时长、峰值、UP 主名字、动态正文都是编的，只为看格式和文案。",
                   indent=0, pady=(6, 0))
 
         # ---------------- 保存 ----------------
@@ -3236,9 +3285,14 @@ class App:
 
         sc = self.cfg.get("subscribe") or {}
         self.var_sub_on.set(bool(sc.get("enabled", False)))
+        self.var_sub_dyn.set(bool(sc.get("dynamics", False)))
         self.var_sub_sec.set(str(int(sc.get("poll_seconds", 300) or 300)))
         self.txt_sub.delete("1.0", "end")
         self.txt_sub.insert("1.0", join_templates(sc))
+        self.txt_dyn.delete("1.0", "end")
+        self.txt_dyn.insert("1.0", join_templates(
+            {"templates": sc.get("dyn_templates") or [],
+             "template": sc.get("dyn_template") or ""}))
         self._refresh_sub_tree()
 
         self._refresh_group_tree()
@@ -3359,11 +3413,26 @@ class App:
             if self.var_sub_on.get() and not (sub_old.get("ups") or []):
                 raise ValueError("勾了「UP 主发新视频时通知」，但一个 UP 主都没加。"
                                  "先去「触发方式」页把 UID 加上。")
+            # 动态的开关在界面里，凭据不在（跟控制端口 token 一个口径：
+            # 凭据只留在 config.json 里，界面不回显）。所以这里必须拦一下 ——
+            # 不然用户勾了"也通知动态"、保存、看着一切正常，实际 load_config
+            # 会因为没有凭据把动态归一成关闭，一条都不会发。
+            if self.var_sub_dyn.get() and not str(
+                    sub_old.get("sessdata") or "").strip():
+                raise ValueError(
+                    "勾了「也通知动态」，但配置里没有登录态。\n\n"
+                    "动态接口匿名读不到（实测，B站官方号也一样），得先填 "
+                    "subscribe.sessdata。\n"
+                    "怎么拿：浏览器登录 B站 → F12 → Application → Cookies → "
+                    "bilibili.com → 复制 SESSDATA 的值。\n"
+                    "填进这个文件（先关掉本程序再改）：\n{}".format(CONFIG_PATH))
+
             _sblocks = split_templates(self.txt_sub.get("1.0", "end-1c"))
-            # 同 reminder/offline：就地 update。at_all 界面上不暴露，
-            # 整块替换会把它连用户的选择一起丢掉。
+            # 同 reminder/offline：就地 update。at_all 与 sessdata 界面上不暴露，
+            # 整块替换会把它们连用户的选择一起丢掉。
             self.cfg.setdefault("subscribe", {}).update({
                 "enabled": bool(self.var_sub_on.get()),
+                "dynamics": bool(self.var_sub_dyn.get()),
                 "poll_seconds": num(self.var_sub_sec, "订阅轮询间隔", 60, 86400),
                 "at_all": bool(sub_old.get("at_all", False)),
             })
@@ -3371,6 +3440,11 @@ class App:
                 self.cfg["subscribe"]["template"] = _sblocks[0]
                 self.cfg["subscribe"]["templates"] = (
                     _sblocks if len(_sblocks) > 1 else [])
+            _dblocks = split_templates(self.txt_dyn.get("1.0", "end-1c"))
+            if _dblocks:
+                self.cfg["subscribe"]["dyn_template"] = _dblocks[0]
+                self.cfg["subscribe"]["dyn_templates"] = (
+                    _dblocks if len(_dblocks) > 1 else [])
 
             # 下播文案跟开播一样是多条，用单独一行 --- 分隔。
             # 存的时候铺开成 templates 列表 + template（第一条）——
@@ -3977,20 +4051,22 @@ class App:
         self.run_async(work, done)
 
     def preview_messages(self):
-        """把四类消息渲染出来给用户看。**绝不发送。**"""
-        try:
-            items = core.preview_messages(self.cfg)
-        except Exception as exc:
-            messagebox.showerror("预览失败", str(exc))
-            return
+        """测试窗口：把各类消息渲染出来给用户看。**绝不发送。**
 
+        为什么带「换一批」：池子里每类有十几句，随机挑一次只能看见一句 ——
+        想挑一套自己喜欢的文案，得能连着翻。**文案好不好，只能靠眼睛看**，
+        而原来的窗口关掉再打开才是另一条，翻十次就烦了。
+        """
         win = tk.Toplevel(self.root)
-        win.title("将要发送的内容（预览，不会真的发）")
+        win.title("测试窗口 —— 将要发送的内容（不会真的发）")
         win.configure(background=BG)
-        win.geometry("620x560")
+        win.geometry("640x600")
         win.transient(self.root)
 
-        head = tk.Label(win, text="下面这些**只是渲染结果**，一条都没发出去。",
+        head = tk.Label(win,
+                        text="下面这些**只是渲染结果**，一条都没发出去。\n"
+                             "点「换一批」重新随机挑文案 —— 池子里有十几句，"
+                             "多翻几次就知道自己喜欢哪套。",
                         background=BG, foreground=MUTED, font=(FONT, 9),
                         justify="left", anchor="w", padx=16, pady=12)
         head.pack(fill="x")
@@ -3999,13 +4075,27 @@ class App:
                       relief="flat", padx=16, pady=12, borderwidth=0,
                       highlightthickness=0, font=(pick_log_font(), 10))
         box.pack(fill="both", expand=True, padx=16, pady=(0, 12))
-        for title, text in items:
-            box.insert("end", "【{}】\n".format(title))
-            box.insert("end", text + "\n\n")
-        box.config(state="disabled")
 
-        ttk.Button(win, text="关闭", width=10,
-                   command=win.destroy).pack(pady=(0, 14))
+        def fill():
+            try:
+                items = core.preview_messages(self.cfg)
+            except Exception as exc:
+                items = [("渲染失败", "{}\n\n（不是没救了：多数是配置里某个模板"
+                                     "写坏了，跑一次 1-自检.bat 能看到是哪个）".format(exc))]
+            box.config(state="normal")
+            box.delete("1.0", "end")
+            for title, text in items:
+                box.insert("end", "【{}】\n".format(title))
+                box.insert("end", text + "\n\n")
+            box.config(state="disabled")
+
+        btns = tk.Frame(win, background=BG)
+        btns.pack(pady=(0, 14))
+        ttk.Button(btns, text="换一批", width=12,
+                   command=fill).pack(side="left", padx=6)
+        ttk.Button(btns, text="关闭", width=10,
+                   command=win.destroy).pack(side="left", padx=6)
+        fill()
 
     def send_test_private(self, kind="live"):
         """私聊发一条测试。**真的会发，但只发到指定的 QQ，不进群。**
@@ -4021,6 +4111,7 @@ class App:
             return
 
         off_cfg = self.cfg.get("offline_message") or {}
+        sub_cfg = self.cfg.get("subscribe") or {}
         if kind == "offline":
             if not off_cfg.get("enabled", True):
                 messagebox.showinfo("下播提示是关着的",
@@ -4030,6 +4121,30 @@ class App:
                 template=core.pick_from(off_cfg.get("templates"),
                                         off_cfg.get("template"), kind="offline"),
                 extra={"game": "测试游戏", "duration": "2 小时 15 分", "peak": 42})
+        elif kind == "video":
+            if not sub_cfg.get("enabled"):
+                messagebox.showinfo("订阅是关着的",
+                                    "配置里没开 UP 主订阅，发出来也不代表实际会发。")
+            text = core.render_text(
+                self.cfg,
+                template=core.pick_from(sub_cfg.get("templates"),
+                                        sub_cfg.get("template"), kind="video"),
+                extra={"up": "某位 UP 主", "title": "这条是测试视频的标题",
+                       "link": "https://www.bilibili.com/video/BV1xx411c7mD"})
+        elif kind == "dynamic":
+            if not sub_cfg.get("dynamics"):
+                messagebox.showinfo(
+                    "动态是关着的",
+                    "配置里没开「也通知动态」，或者还没填 subscribe.sessdata。\n"
+                    "文案照样可以看，实际不会发。")
+            text = core.render_text(
+                self.cfg,
+                template=core.pick_from(sub_cfg.get("dyn_templates"),
+                                        sub_cfg.get("dyn_template"),
+                                        kind="dynamic"),
+                extra={"up": "某位 UP 主",
+                       "text": "这条动态大概是这个长度，专门用来试文案排版。",
+                       "link": "https://t.bilibili.com/1234567890123456789"})
         else:
             text = core.render_text(self.cfg, extra={"game": "测试游戏"})
 

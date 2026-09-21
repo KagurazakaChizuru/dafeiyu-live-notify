@@ -392,6 +392,9 @@ def run_redact_tests():
         ("目标群数：3", False),
         # 误伤检查：路径里有 token 这个词，但它不是密钥
         (r"日志已保存到 C:\token\abc.txt", False),
+        # SESSDATA 是能直接拿去登录的凭据，比控制端口 token 严重得多。
+        # 它的值里有 % 转义，正则的字符类必须包含 %，否则漏掉最常见的形式。
+        ("[Config] sessdata=SESSDATA%3Dabc%2Cdef123456", True),
     ]
     for text, should_mask in cases:
         out = live_notify.redact(text)
@@ -784,7 +787,7 @@ def run_bili_tests(path):
     def poll():
         return live_notify.poll_subscriptions(
             sub_cfg, state, space,
-            lambda v, up, label: sent.append(v["bvid"]), quiet)
+            lambda item, up, label, kind: sent.append(item["bvid"]), quiet)
 
     n, _ = poll()
     check("第一次轮询只记基线，一条都不发", n == 0 and sent == [], repr(sent))
@@ -844,6 +847,123 @@ def run_bili_tests(path):
                                    quiet, now=t0 + live_notify.SUB_BACKOFF_SECONDS + 1)
     check("退避结束就恢复轮询", cs.asked == [42], repr(cs.asked))
     check("恢复之后退避标记被撤掉", "backoff_until" not in st, repr(st))
+
+    # ---- 动态正文的四种摆法 ----
+    check("动态正文能从句子里抠出来",
+          bili._dyn_text({"modules": {"module_dynamic": {
+              "desc": {"text": "今天做了个决定"}}}}) == "今天做了个决定")
+    check("投稿类动态用视频标题",
+          bili._dyn_text({"modules": {"module_dynamic": {
+              "major": {"archive": {"title": "新片标题"}}}}}) == "新片标题")
+    check("图文动态用图上的字",
+          bili._dyn_text({"modules": {"module_dynamic": {
+              "major": {"draw": {"items": [{"description": "图里的字"}]}}}}}) == "图里的字")
+    check("抠不到就返回空串（那一行会被整行删掉）",
+          bili._dyn_text({"modules": {}}) == "")
+
+    # 没凭据时必须当场报错。返回空列表的话，用户会以为"这个 UP 主没发动态"，
+    # 而真相是这块根本读不到东西 —— 静默失败比报错难查十倍。
+    try:
+        bili.Space().dynamics(12345)
+        unresolved = None
+    except bili.BiliError as exc:
+        unresolved = str(exc)
+    check("没有 SESSDATA 时取动态直接报错（而且不发请求）",
+          bool(unresolved) and "登录态" in unresolved, repr(unresolved))
+
+    # ---- clip_text：动态可以是一整篇长文 ----
+    check("短正文原样返回", live_notify.clip_text("就一句话") == "就一句话")
+    check("换行和多余空格被压平",
+          live_notify.clip_text("第一行\n\n  第二行") == "第一行 第二行")
+    _long = "一" * 80 + "。" + "二" * 80
+    _cut = live_notify.clip_text(_long, limit=100)
+    check("长正文在标点处截断",
+          len(_cut) <= 101 and _cut.endswith("。"), repr(_cut[-8:]))
+    check("没有标点可断时才用省略号",
+          live_notify.clip_text("三" * 200, limit=50).endswith("…"))
+
+    # ---- 配置：动态必须有凭据才开 ----
+    raw2 = json.load(io.open(path, encoding="utf-8"))
+    tmp2 = path + ".dyn"
+
+    def sub_load(block):
+        raw2["subscribe"] = block
+        io.open(tmp2, "w", encoding="utf-8").write(
+            json.dumps(raw2, ensure_ascii=False))
+        return live_notify.load_config(tmp2)
+
+    try:
+        c = sub_load({"enabled": True, "dynamics": True,
+                      "ups": [{"mid": 42}]})
+        check("没有凭据时动态被强制关掉（不留一个空转的开关）",
+              c["subscribe"]["dynamics"] is False,
+              repr(c["subscribe"]["dynamics"]))
+        c = sub_load({"enabled": True, "dynamics": True, "sessdata": "abc%2Cdef",
+                      "ups": [{"mid": 42}]})
+        check("有凭据时动态才真的开", c["subscribe"]["dynamics"] is True)
+        check("凭据原样带出来", c["subscribe"]["sessdata"] == "abc%2Cdef")
+        check("动态文案池被内置池填上",
+              len(c["subscribe"]["dyn_templates"])
+              == len(live_notify.TEMPLATE_POOLS["dynamic"]),
+              repr(len(c["subscribe"]["dyn_templates"] or [])))
+    finally:
+        try:
+            os.remove(tmp2)
+        except OSError:
+            pass
+
+    # ---- 轮询：动态那一路（假客户端，不联网）----
+    class DynSpace:
+        def __init__(self, vids, dyns):
+            self.vids = vids
+            self.dyns = dyns
+            self.dyn_asked = 0
+            self.last_sessdata = None
+
+        def videos(self, mid):
+            return list(self.vids)
+
+        def up_name(self, mid):
+            return "某UP"
+
+        def dynamics(self, mid, sessdata=""):
+            self.dyn_asked += 1
+            self.last_sessdata = sessdata
+            return list(self.dyns)
+
+    def dyn_item(did, ts, dtype="DYNAMIC_TYPE_WORD"):
+        return {"id": did, "created": ts, "text": "正文" + did, "type": dtype,
+                "link": "https://t.bilibili.com/" + did}
+
+    cfg_dyn = {"ups": [{"mid": 42, "enabled": True, "note": ""}],
+               "dynamics": True, "sessdata": "S", "at_all": False}
+    ds = DynSpace([], [dyn_item("D300", 300), dyn_item("D200", 200)])
+    st2 = {}
+    got = []
+    n, _ = live_notify.poll_subscriptions(
+        cfg_dyn, st2, ds, lambda item, up, label, kind: got.append(kind), quiet)
+    check("动态第一次也只记基线、不补发",
+          n == 0 and got == [] and st2["ups"]["42"]["last_dyn_created"] == 300,
+          repr((n, got, st2)))
+
+    ds.dyns = ds.dyns + [dyn_item("D400", 400, "DYNAMIC_TYPE_AV"),
+                         dyn_item("D401", 401, "DYNAMIC_TYPE_DRAW")]
+    n, _ = live_notify.poll_subscriptions(
+        cfg_dyn, st2, ds,
+        lambda item, up, label, kind: got.append((kind, item["id"])), quiet)
+    check("第二次播报新动态，并跳过投稿类动态（同一个视频不报两遍）",
+          n == 1 and got == [("dynamic", "D401")], repr((n, got)))
+    check("凭据传到了 bili 那边", ds.last_sessdata == "S", repr(ds.last_sessdata))
+
+    # 投稿与动态的基线互不干扰：动态播报不该推进投稿的基线
+    check("动态和投稿的基线分开记",
+          st2["ups"]["42"].get("last_created") in (None, 0)
+          and st2["ups"]["42"]["last_dyn_created"] == 401, repr(st2["ups"]["42"]))
+
+    ds.dyn_asked = 0
+    live_notify.poll_subscriptions({"ups": [{"mid": 42, "enabled": True}]},
+                                   {}, ds, lambda *a: None, quiet)
+    check("没开动态就一个动态请求都不发", ds.dyn_asked == 0, repr(ds.dyn_asked))
 
     return failures
 
@@ -905,6 +1025,14 @@ def run_template_tests(path):
               "{" not in rendered and "}" not in rendered, repr(rendered))
     except Exception as exc:
         check("render_text 用全白名单不炸", False, str(exc))
+
+    # {text} 拿不到时那一整行要消失，跟 {game} 一个规矩 —— 否则群里会出现
+    # 一行空白，看着像程序坏了。
+    _empty = live_notify.render_text(live_notify.load_config(path),
+                                     template="标题\n{text}\n尾")
+    check("{text} 是空的时候整行消失，不留空行",
+          "{text}" not in _empty and "\n\n" not in _empty and "尾" in _empty,
+          repr(_empty))
 
     # ---- 内置文案池也要扫 ----
     #
@@ -1398,6 +1526,34 @@ def run_widget_presence_tests(path):
             check("勾了开关却没名单，保存当场拦下",
                   bool(sub_err) and "UP 主" in str(sub_err), str(sub_err))
             app.var_sub_on.set(False)
+            app._ui_to_cfg()
+
+            # 动态的开关在界面上，凭据不在（跟控制端口 token 一个口径）。
+            # 所以"勾了动态却没凭据"必须当场拦下 —— 不拦就是：用户看着一切
+            # 正常，实际 load_config 把动态归一成关闭，一条都不发。
+            check("设置页有新动态文案框",
+                  bool(app.txt_dyn.get("1.0", "end-1c").strip()))
+            app.cfg.setdefault("subscribe", {})["sessdata"] = ""
+            app.var_sub_dyn.set(True)
+            dyn_err = app._ui_to_cfg()
+            check("勾了动态却没凭据：保存当场拦下，并说清去哪儿填",
+                  bool(dyn_err) and "登录态" in str(dyn_err), str(dyn_err))
+            # 要把两类都预览出来，开关和名单都得齐（预览按"开着的类"列）
+            app.cfg["subscribe"]["ups"] = [
+                {"mid": 12345, "enabled": True, "note": "测试"}]
+            app.var_sub_on.set(True)
+            app.cfg["subscribe"]["sessdata"] = "test-sessdata-value"
+            dyn_err = app._ui_to_cfg()
+            check("填了凭据就能保存，且凭据不被吃掉",
+                  not dyn_err
+                  and app.cfg["subscribe"]["sessdata"] == "test-sessdata-value",
+                  str(dyn_err))
+            titles = [t for t, _ in live_notify.preview_messages(app.cfg)]
+            check("测试窗口里出现了「新动态」这一类",
+                  any("新动态" in t for t in titles), repr(titles))
+            app.var_sub_dyn.set(False)
+            app.var_sub_on.set(False)
+            app.cfg["subscribe"]["ups"] = []
             app._ui_to_cfg()
     except Exception as exc:
         check("界面能否建成", False, "{}: {}".format(type(exc).__name__, exc))

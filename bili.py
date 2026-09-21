@@ -127,13 +127,16 @@ class Space:
         self._token_day = ""
 
     # ---- 基础设施 ----
-    def _get(self, path, query="", referer="https://www.bilibili.com/"):
+    def _get(self, path, query="", referer="https://www.bilibili.com/",
+             cookie=""):
         """发一个请求。
 
         **`Referer` 必须像那么回事。** 实测：空间接口的 Referer 写成光秃秃的
         站根（`https://space.bilibili.com/`）会被挡在 WAF 外面，回 **HTTP 412**
         ——连 JSON 都不是，报错看不出原因。指到具体空间页（`/<mid>/video`）
         就正常返回 `code=0`。
+
+        `cookie` 是附加在指纹后面的登录态，只有动态接口需要（见 `dynamics`）。
         """
         url = API + path + ("?" + query if query else "")
         req = urllib.request.Request(url)
@@ -148,8 +151,11 @@ class Space:
         # 那一整套"反而更像伪造请求 —— 所以这里刻意少发，不是漏了。
         req.add_header("User-Agent", UA)
         req.add_header("Referer", referer)
-        if self._cookie:
-            req.add_header("Cookie", self._cookie)
+        jar = self._cookie
+        if cookie:
+            jar = (jar + "; " if jar else "") + cookie
+        if jar:
+            req.add_header("Cookie", jar)
         gap = _MIN_GAP - (time.time() - self._last_call)
         if gap > 0:
             time.sleep(gap)
@@ -234,6 +240,60 @@ class Space:
             })
         return out
 
+    def dynamics(self, mid, sessdata="", page_size=20):
+        """取这个 UP 主最新的一批动态。**必须有登录态（SESSDATA）。**
+
+        别浪费时间试匿名：实测（2026-09-21）这个接口不登录时要么回 `-352`，
+        要么回 `code=0` 但 `items` 是空数组；而且**连 B站官方号（mid=2）
+        结果一样** —— 不是账号问题，是匿名一律不给数据。老接口
+        `api.vc.bilibili.com/dynamic_svr/space_history` 已经 404 没了。
+
+        所以调用方要先去配置里拿到 SESSDATA；这里拿不到就**直接报错**，
+        不装作"这个 UP 主没发动态"——那会让人以为功能是好的。
+
+        返回 [{"id","created","text","type","link"}, ...]，按时间倒序。
+        """
+        mid = int(mid)
+        sessdata = str(sessdata or "").strip()
+        if not sessdata:
+            raise BiliError("动态接口需要登录态：配置里 subscribe.sessdata 是空的"
+                            "（匿名读不到动态，实测如此）")
+        self._ensure_token()
+        params = {
+            "host_mid": mid, "offset": "", "timezone_offset": -480,
+            "platform": "web", "features": "itemOpusStyle,listOnlyfans",
+            "web_location": 333.1387,
+        }
+        params.update(_DM_PROBE)
+        ref = "https://space.bilibili.com/{}/dynamic".format(mid)
+        query = _sign(params, _mixin_key(self._img, self._sub))
+        data = self._get("/x/polymer/web-dynamic/v1/feed/space", query,
+                         referer=ref, cookie="SESSDATA=" + sessdata)
+        code = data.get("code")
+        if code in (-352, -401):
+            # 凭据过期也会走到这里，而 -352 的文案完全看不出是这个原因
+            raise BiliError("动态接口不认这个登录态：code={}（SESSDATA 过期了？）"
+                            .format(code))
+        if code != 0:
+            raise BiliError("取动态失败：code={} msg={}".format(
+                code, data.get("message")))
+        items = (data.get("data") or {}).get("items") or []
+        out = []
+        for it in items:
+            dyn_id = str(it.get("id_str") or "")
+            if not dyn_id:
+                continue
+            author = ((it.get("modules") or {}).get("module_author") or {})
+            out.append({
+                "id": dyn_id,
+                "created": int(author.get("pub_ts") or 0),
+                "text": _dyn_text(it),
+                "type": str(it.get("type") or ""),
+                "link": "https://t.bilibili.com/" + dyn_id,
+            })
+        out.sort(key=lambda x: x["created"])
+        return out
+
     def up_name(self, mid):
         """UP 主的显示名。拿不到就返回空串（调用方自己决定怎么兜）。"""
         try:
@@ -243,6 +303,36 @@ class Space:
             return str(((data.get("data") or {}).get("card") or {}).get("name") or "")
         except BiliError:
             return ""
+
+
+#: 投稿动态。它跟 arc/search 拿到的是**同一件事** —— 两个都开就会为同一个
+#: 视频播报两次，所以在 poll_subscriptions 里按 type 跳过（见那边的注释）。
+DYN_TYPE_AV = "DYNAMIC_TYPE_AV"
+
+
+def _dyn_text(item):
+    """从一条动态里抠出能当标题用的那句话。
+
+    动态的正文位置随类型变：纯文字在 desc.text，投稿在 major.archive.title，
+    图文在 major.draw.items[].description，专栏在 major.opus.title。
+    抠不到就返回空串 —— 调用方会把带它的那几行删掉，而不是发一条空的。
+    """
+    md = ((item.get("modules") or {}).get("module_dynamic") or {})
+    text = str((md.get("desc") or {}).get("text") or "").strip()
+    if text:
+        return text
+    major = md.get("major") or {}
+    for key, field in (("archive", "title"), ("opus", "title"),
+                       ("article", "title"), ("common", "title")):
+        val = str((major.get(key) or {}).get(field) or "").strip()
+        if val:
+            return val
+    draw = major.get("draw") or {}
+    for pic in (draw.get("items") or []):
+        val = str(pic.get("description") or "").strip()
+        if val:
+            return val
+    return ""
 
 
 def _fmt_time(epoch):
@@ -272,9 +362,23 @@ def main(argv=None):
     except BiliError as exc:
         print("失败：{}".format(exc))
         return 1
-    print("UP：{}（{}）  最新 {} 条：".format(name or "?", mid, min(limit, len(vids))))
+    print("UP：{}（{}）  最新 {} 条投稿：".format(
+        name or "?", mid, min(limit, len(vids))))
     for v in vids[:limit]:
         print("  {}  {}  {}".format(_fmt_time(v["created"]), v["bvid"], v["title"]))
+
+    # 动态要登录态：给它就顺手验一下，没给就明说为什么跳过
+    if len(argv) > 2:
+        sess = argv[2]
+        try:
+            dyns = space.dynamics(mid, sess)
+        except BiliError as exc:
+            print("动态取不到：{}".format(exc))
+            return 1
+        print("\n最新 {} 条动态：".format(min(limit, len(dyns))))
+        for d in dyns[-limit:]:
+            print("  {}  {}  {}".format(_fmt_time(d["created"]), d["type"],
+                                       (d["text"] or "（无文字）")[:40]))
     return 0
 
 
