@@ -2248,6 +2248,14 @@ def run_widget_presence_tests(path):
             check("mix() 过冲时也不吐非法颜色（8 位串会让 Tk 抛异常）",
                   not _bad_mix, repr(_bad_mix))
 
+            # NapCat 的输出是给终端上色的，管道接过来就变成字面噪声：日志里
+            # 显示成 `[32minfo[39m`，看着像程序坏了（用户截图问过）。
+            check("NapCat 日志里的 ANSI 控制码会被剥掉",
+                  gui.strip_ansi("\x1b[32minfo\x1b[39m 网络已连接") == "info 网络已连接",
+                  repr(gui.strip_ansi("\x1b[32minfo\x1b[39m 网络已连接")))
+            check("没有控制码的日志行原样保留",
+                  gui.strip_ansi("当前账号(1234)已登录") == "当前账号(1234)已登录")
+
             # 登录按钮点下去会建窗口、生成二维码 —— 这条路也真的走一遍。
             # 把 QrLogin 换成一个假的（不联网），二维码本身是真的 qr.py 画的。
             class _FakeQrLogin:

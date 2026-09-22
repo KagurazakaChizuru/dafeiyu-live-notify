@@ -1677,6 +1677,19 @@ def _no_window_flags():
 _NAPCAT_PROC = None          # 后台运行的 NapCat 进程句柄
 
 
+#: ANSI 控制序列（上色、清行、移动光标）。
+#:
+#: NapCat 的输出是给终端上色的，管道接过来之后那些控制码就变成了字面噪声：
+#: 日志里显示成 `[32minfo[39m`，看着像程序坏了（用户截图问过）。
+#: 界面是 Text 控件，不认识 ANSI —— 只能剥掉。
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+def strip_ansi(text):
+    """剥掉 ANSI 控制序列，留下人看得懂的字。"""
+    return _ANSI_RE.sub("", text)
+
+
 def start_napcat():
     """在**后台无窗口**启动 NapCat，输出直接送进界面日志。
 
@@ -1736,7 +1749,7 @@ def start_napcat():
             for line in proc.stdout:
                 line = line.rstrip()
                 if line:
-                    core.log("[NapCat] " + line)
+                    core.log("[NapCat] " + strip_ansi(line))
         except Exception:
             pass
         finally:
