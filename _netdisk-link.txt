@@ -1,0 +1,8 @@
+## 下载（夸克网盘）
+
+不会用 GitHub 的走这条 —— 这份包里连 NapCat 都带好了，解压双击 exe 就能用：
+
+https://pan.quark.cn/s/f9e93b942495
+
+（这个地址只写在仓库根目录的 `_netdisk-link.txt` 里，`_release.ps1` 每次发版都把它
+接到 Release 正文末尾，README 里也有一份 —— 一处改动，三处一致。）

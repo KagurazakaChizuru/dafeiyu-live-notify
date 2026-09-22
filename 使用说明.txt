@@ -8,13 +8,11 @@
 
     2. 双击「大肥鱼直播姬.exe」。
 
-    3. 第一次它会要登录一个 QQ：用你想让它当机器人的那个号扫一下码
-       （建议用小号）。二维码在这个文件里，用看图软件打开就行：
+    3. 第一次它会**弹出一个窗口显示二维码**：用你想当机器人的那个号扫一下
+       （建议用小号）。扫完窗口自己关，以后不用再扫。
 
-           app\napcat\cache\qrcode.png
-
-       扫一次就够了，以后它自己记着。（也可以开浏览器进
-       http://127.0.0.1:6099/webui 扫。）
+       （万一没看到那个窗口：二维码也写在 app\napcat\cache\qrcode.png，
+        或者开浏览器进 http://127.0.0.1:6099/webui 扫。）
 
     然后：填上你的直播间地址 → 勾上要通知的群 → 点那个大按钮。
     之后你什么都不用做，开播它自己知道，下播也会说一声。
@@ -23,7 +21,13 @@
     一份私有副本（只读你的 QQ，不改动它），你不用去跑任何脚本。
     如果它说找不到 QQ，那就是这台机器没装 QQ —— 装一次 QQ 再启动即可。
 
-    完整说明：https://github.com/KagurazakaChizuru/dafeiyu-live-notify
+
+【最新版在哪下】
+
+    夸克网盘：https://pan.quark.cn/s/f9e93b942495
+    （包里连 NapCat 都带好了，解压双击 exe 就能用，不用另下东西）
+
+    或者 GitHub：https://github.com/KagurazakaChizuru/dafeiyu-live-notify
               （docs/使用文档.md）
 
 

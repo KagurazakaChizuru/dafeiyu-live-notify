@@ -13,6 +13,10 @@
 
 ### ⬇️ [点这里下载最新版](https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/latest)
 
+**不会用 GitHub 的走夸克网盘** —— 那份包里连 NapCat 都带好了，解压双击 exe 就能用：
+
+> ### 🐟 [夸克网盘下载](https://pan.quark.cn/s/f9e93b942495)
+
 Windows 10 / 11 · 免安装 · 不用装 Python · 解压就能跑
 
 也可以让包管理器装：

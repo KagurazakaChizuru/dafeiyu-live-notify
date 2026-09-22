@@ -58,6 +58,21 @@ if (-not $hit.Success) {
 $body = $hit.Groups[1].Value.Trim()
 Write-Host "body extracted from CHANGELOG: $($body.Length) chars"
 
+# --- 2b. netdisk download footer -------------------------------------------
+# The Quark share link rides along with every release. It lives in exactly one
+# file on purpose: the README, the release notes and the shipped package then
+# cannot drift apart, and nobody has to remember to paste a URL per release.
+# Appended AFTER the title is derived below is wrong - the title comes from the
+# FIRST line of the body, so appending at the end keeps it intact.
+$netdiskFile = Join-Path $root '_netdisk-link.txt'
+if (Test-Path $netdiskFile) {
+    $netdisk = (Get-Content $netdiskFile -Raw -Encoding UTF8).Trim()
+    if ($netdisk) {
+        $body = $body + "`n`n---`n`n" + $netdisk
+        Write-Host "netdisk footer appended: $($netdisk.Length) chars"
+    }
+}
+
 # Title = first line of the section, trailing punctuation trimmed, capped.
 # The unicode escapes keep this file ASCII-only.
 # Strip a leading '###' first: newer CHANGELOG sections open with a '### heading',
