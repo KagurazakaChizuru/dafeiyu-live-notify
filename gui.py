@@ -1700,6 +1700,16 @@ def start_napcat():
     if port_open(3000):
         return True, "NapCat 已经在运行"
 
+    # 私有 QQ 副本不在就**自己建**，别让用户先去跑脚本。
+    #
+    # 网盘版的承诺是"解压、双击 exe"。中间插一步 PowerShell 等于把本来能自动
+    # 的事推给用户 —— 实测就是这么翻车的：有人照着说明跑 _setup-qq-copy.ps1，
+    # 得到的是"-File 形式参数的实际参数不存在"。脚本留着当后路，但不是必经路。
+    ok, msg = core.ensure_qq_copy()
+    core.log(msg, "INFO" if ok else "ERROR")
+    if not ok:
+        return False, msg
+
     account = read_account()
     args = ["cmd", "/c", launcher]
     if account:

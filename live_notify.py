@@ -47,6 +47,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 
@@ -83,7 +84,7 @@ except ImportError:                # 缺文件时群聊整体降级
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.8.0"
+VERSION = "1.8.1"
 
 def _resolve_base_dir():
     """确定**数据目录**（config.json / logs / napcat 所在处）。
@@ -109,6 +110,204 @@ LOG_DIR = os.path.join(BASE_DIR, "logs")
 SUB_STATE_PATH = os.path.join(LOG_DIR, "subscribe-state.json")
 #: 群聊记着"每个群读到哪条了"和"有哪些提醒"，重启不能丢
 CHAT_STATE_PATH = os.path.join(LOG_DIR, "chat-state.json")
+
+# --------------------------------------------------------------------------
+#  私有 QQ 副本：NapCat 跑在它上面，不占用用户自己那个 QQ
+# --------------------------------------------------------------------------
+#: 副本目录名。`app\napcat\launcher-second.bat` 里写的就是 `..\qq-napcat-private`。
+QQ_COPY_DIRNAME = "qq-napcat-private"
+
+
+def find_qq_root():
+    """找到本机装的 QQ 的安装目录；没有就返回 None。
+
+    口径跟 `_setup-qq-copy.ps1` 一致：先读卸载项里的 `UninstallString`（它的
+    父目录就是安装目录），再退到两个常见位置。**不写死盘符** —— QQ 装哪儿是
+    用户的事，这台机器就在 C 盘，下一台未必。
+    """
+    roots = []
+    try:
+        import winreg                   # 只有 Windows 有
+    except ImportError:
+        winreg = None
+    if winreg is not None:
+        for hive, sub in (
+            (winreg.HKEY_LOCAL_MACHINE,
+             r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\QQ"),
+            (winreg.HKEY_LOCAL_MACHINE,
+             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\QQ"),
+            (winreg.HKEY_CURRENT_USER,
+             r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\QQ"),
+        ):
+            try:
+                with winreg.OpenKey(hive, sub) as key:
+                    raw = winreg.QueryValueEx(key, "UninstallString")[0]
+            except OSError:
+                continue
+            roots.append(os.path.dirname(os.path.abspath(str(raw).strip('"').strip())))
+    roots += [r"C:\Program Files\Tencent\QQNT",
+              r"C:\Program Files (x86)\Tencent\QQNT"]
+    for root in roots:
+        if root and os.path.isdir(os.path.join(root, "versions")):
+            return root
+    return None
+
+
+def qq_copy_ready(path):
+    """这份副本算不算建好了。
+
+    判据不是"目录在不在"，而是**里面的东西真能解析**：`QQ.exe` 在，且
+    `versions\<版本>\QQNT.dll` 读得到。只看顶层永远看不出问题 —— junction
+    在 `versions\<版本>` 那一层，漏了它就会每次启动都重建一遍。
+    """
+    if not os.path.isfile(os.path.join(path, "QQ.exe")):
+        return False
+    vers = os.path.join(path, "versions")
+    try:
+        names = os.listdir(vers)
+    except OSError:
+        return False
+    for name in names:
+        if os.path.isfile(os.path.join(vers, name, "QQNT.dll")):
+            return True
+    return False
+
+
+def _is_link_dir(path):
+    """这个目录是不是 junction / 符号链接。"""
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return False
+    if getattr(info, "st_reparse_tag", 0):
+        return True
+    return os.path.islink(path)
+
+
+def _link_dir(link, target):
+    """建一个目录 junction（link -> target）。
+
+    为什么用 `mklink /J` 而不是 `os.symlink`：符号链接要管理员或开发者模式，
+    junction 不用 —— 这也正是副本能从 1.1 GB 掉到 8 MB 的原因，versions 那
+    几百兆没必要复制一份。
+    """
+    try:
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+    except OSError:
+        pass
+    proc = subprocess.run(["cmd", "/c", "mklink", "/J", link, target],
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    if proc.returncode != 0:
+        out = proc.stdout.decode("utf-8", "replace").strip()
+        log("建 junction 失败：{}".format(out), "WARN")
+    return os.path.isdir(link)
+
+
+def _drop_qq_copy(path):
+    """删掉半建的副本。
+
+    **先把 junction 摘掉再删目录。** `rmtree` 会顺着 junction 走进用户真实的
+    QQ 安装目录，把 QQ 本体删掉 —— 这句话是 `_setup-qq-copy.ps1` 的注释里
+    写的，不是我推的；照做。
+    """
+    vers = os.path.join(path, "versions")
+    if os.path.isdir(vers):
+        try:
+            for name in os.listdir(vers):
+                full = os.path.join(vers, name)
+                if _is_link_dir(full):
+                    try:
+                        os.rmdir(full)          # 只摘链接，不进去
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+    shutil.rmtree(path, ignore_errors=True)
+
+
+def ensure_qq_copy(base_dir=None, qq_root=None):
+    """确保私有 QQ 副本就位，没有就照用户自己的 QQ 现建一份。
+
+    **为什么放到程序里，而不是让用户先跑一个脚本**：网盘版的承诺是"解压、
+    双击 exe"。中间插一步 PowerShell，等于把本来能自动的事推给用户 —— 实测
+    就是这么翻车的：有人照着说明跑 `_setup-qq-copy.ps1`，先从包里找不到那个
+    文件，就算找到了也要先会开命令行。脚本留着，但它是**后路**，不是必经路。
+
+    返回 `(ok, message)`：message 是给用户看的一句话（会进运行日志）。
+    """
+    dest = os.path.join(base_dir or BASE_DIR, QQ_COPY_DIRNAME)
+    if qq_copy_ready(dest):
+        return True, "私有 QQ 副本已就位"
+
+    root = qq_root or find_qq_root()
+    # 有目录但里面没有 versions，等于没找到 QQ（注册表指向一个已经卸掉的目录
+    # 也会走到这儿）。**给用户一句话，不要抛 WinError** —— 他要的是"我该干嘛"，
+    # 不是异常堆栈。
+    if not root or not os.path.isdir(os.path.join(root, "versions")):
+        return False, ("没找到你装的 QQ，建不了私有副本。装一次 QQ 再启动就行 —— "
+                       "副本是照你自己那份 QQ 现建的，全程只读，不动你的 QQ。")
+
+    src_vers = os.path.join(root, "versions")
+    try:
+        versions = sorted((n for n in os.listdir(src_vers)
+                           if os.path.isdir(os.path.join(src_vers, n))),
+                          reverse=True)
+    except OSError as exc:
+        log("读不了 QQ 的 versions 目录：{}".format(exc), "WARN")
+        versions = []
+    if not versions:
+        return False, "QQ 目录里没有版本文件夹：{}".format(src_vers)
+    newest = versions[0]
+
+    # 半拉的副本先清掉 —— 但绝不能顺着 junction 删进真实 QQ（见 _drop_qq_copy）。
+    if os.path.isdir(dest):
+        log("发现不完整的私有 QQ 副本，先清掉重建")
+        _drop_qq_copy(dest)
+
+    # 1) 顶层那些小文件是真拷贝（约 8 MB）
+    copied = skipped = 0
+    try:
+        os.makedirs(dest, exist_ok=True)
+    except OSError as exc:
+        return False, "建不了 {}：{}".format(dest, exc)
+    for name in os.listdir(root):
+        if name == "versions" or re.match(r"^(Uninstall|QQUninstall)", name):
+            continue
+        src = os.path.join(root, name)
+        dst = os.path.join(dest, name)
+        try:
+            if os.path.isdir(src):
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                shutil.copy2(src, dst)
+            copied += 1
+        except OSError:
+            # 单个文件拷不动（被占用、没权限）不该让整件事失败：
+            # 缺一两个 dll 还能跑，缺 QQ.exe 下面会验证出来。
+            skipped += 1
+
+    # 2) versions：小 json 照拷，几百兆的版本目录用 junction 指过去
+    dest_vers = os.path.join(dest, "versions")
+    try:
+        os.makedirs(dest_vers, exist_ok=True)
+        for name in os.listdir(src_vers):
+            full = os.path.join(src_vers, name)
+            if os.path.isfile(full) and name.lower().endswith(".json"):
+                shutil.copy2(full, os.path.join(dest_vers, name))
+    except OSError:
+        pass
+    _link_dir(os.path.join(dest_vers, newest), os.path.join(src_vers, newest))
+
+    # 3) 验证：不验证就等于"我以为建好了"
+    if not qq_copy_ready(dest):
+        return False, ("私有 QQ 副本没建成功（{}）。可以手动跑一次 "
+                       "app\\_setup-qq-copy.ps1 看看报什么错。").format(dest)
+    log("私有 QQ 副本已建好：{} 个文件，versions\\{} 用 junction 指向你的 QQ（{}）".format(
+        copied, newest, root))
+    if skipped:
+        log("有 {} 个文件没拷过来（多半被占用），不影响启动".format(skipped), "WARN")
+    return True, "已自动建好私有 QQ 副本（用的是你自己的 QQ：{}）".format(root)
+
 
 # --------------------------------------------------------------------------
 #  内置文案池

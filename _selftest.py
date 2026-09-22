@@ -555,7 +555,7 @@ def teardown_tk(root):
 
     本机撞上只是刷几行报错（退出码仍然是 0），CI 上却会把整个过程**吊死**：
     1.7.1 起那 13 次运行就是这么挂到 6 小时作业超时的，挂点固定在
-    「# 15/17 控件引用与创建必须对得上」之后。所以这里连同 after 一起收。
+    「# 15/18 控件引用与创建必须对得上」之后。所以这里连同 after 一起收。
     """
     try:
         for aid in root.tk.call("after", "info"):
@@ -2490,6 +2490,105 @@ def run_main_wiring_tests():
     return failures
 
 
+
+def run_qq_copy_tests():
+    """第 18 组：私有 QQ 副本必须能**自己建**出来。
+
+    网盘版不带 QQ 本体，NapCat 跑在 `app\\qq-napcat-private` 上，而那份副本是
+    照用户自己装的 QQ 现建的：顶层 ~8 MB 真文件 + `versions\\<版本>` 一个
+    junction（所以是 8 MB 而不是 1.1 GB）。这一步以前要用户手动跑 PowerShell，
+    实测有人第一步就撞「文件不存在」。现在程序自己建，这一组管它别建坏。
+
+    **全程用假 QQ**：不碰这台机器上真实装着的 QQ。特别要盯住两件事：
+      · 版本目录必须是 junction —— 一旦变成真拷贝，副本就从 8 MB 涨到 1 GB；
+      · 清理半拉副本时必须先摘链接 —— rmtree 会顺着 junction 删进真实的 QQ。
+    """
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    failures = []
+    work = _tempfile.mkdtemp(prefix="dfy-selftest-qq-")
+
+    def check(name, ok, detail=""):
+        print("  [{}] {}{}".format("PASS" if ok else "FAIL", name,
+                                   "  " + detail if detail and not ok else ""))
+        if not ok:
+            failures.append(name)
+
+    try:
+        fake = os.path.join(work, "fake-qq")
+        os.makedirs(os.path.join(fake, "versions", "9.9.9"))
+        for name in ("QQ.exe", "vcruntime140.dll", "Uninstall.exe", "QQUninstall.exe"):
+            io.open(os.path.join(fake, name), "wb").write(b"x" * 64)
+        io.open(os.path.join(fake, "versions", "updater.json"), "w").write("{}")
+        io.open(os.path.join(fake, "versions", "9.9.9", "QQNT.dll"), "wb").write(b"y" * 64)
+        # 真实 QQ 的版本目录里有个几十兆的更新包，不该被拷进来
+        io.open(os.path.join(fake, "versions", "9.9.9", "update-big.zip"), "wb").write(b"z" * 4096)
+
+        app = os.path.join(work, "app")
+        os.makedirs(app)
+        ok, msg = live_notify.ensure_qq_copy(base_dir=app, qq_root=fake)
+        dest = os.path.join(app, live_notify.QQ_COPY_DIRNAME)
+        vers = os.path.join(dest, "versions")
+        link = os.path.join(vers, "9.9.9")
+
+        check("私有 QQ 副本能自己建出来（不靠用户跑脚本）",
+              ok and live_notify.qq_copy_ready(dest), msg)
+        check("顶层文件是真拷贝（QQ.exe 在）",
+              os.path.isfile(os.path.join(dest, "QQ.exe")))
+        check("卸载程序没被拷进来",
+              not os.path.exists(os.path.join(dest, "Uninstall.exe")))
+        check("versions 下的小 json 照拷",
+              os.path.isfile(os.path.join(vers, "updater.json")))
+        check("版本目录是 junction 而不是复制（差 1 GB）",
+              live_notify._is_link_dir(link))
+        check("junction 真能解析（QQNT.dll 读得到）",
+              os.path.isfile(os.path.join(link, "QQNT.dll")))
+
+        def _own_size(path):
+            """副本**自己**的体积：不跟着 junction 走进去。
+
+            为什么专门写一个：`os.path.exists(link/update-big.zip)` 永远是 True ——
+            那个文件通过 junction 能看见（它本来就在用户的 QQ 里）。真正要守的是
+            "副本没把它复制一份"，所以量的是不含链接内容的体积。
+            """
+            total = 0
+            for dirpath, dirnames, filenames in os.walk(path):
+                dirnames[:] = [d for d in dirnames
+                               if not live_notify._is_link_dir(os.path.join(dirpath, d))]
+                for f in filenames:
+                    try:
+                        total += os.path.getsize(os.path.join(dirpath, f))
+                    except OSError:
+                        pass
+            return total
+
+        _own = _own_size(dest)
+        check("几十兆的更新包没被复制（副本自身体积很小）", _own < 1024,
+              "{} 字节".format(_own))
+        _ok2, _msg2 = live_notify.ensure_qq_copy(base_dir=app, qq_root=fake)
+        check("已经建好时不重建", "已就位" in _msg2, _msg2)
+
+        empty = os.path.join(work, "no-qq")
+        os.makedirs(empty)
+        ok3, msg3 = live_notify.ensure_qq_copy(base_dir=os.path.join(work, "app2"),
+                                               qq_root=empty)
+        check("找不到 QQ 时给人话、不抛异常",
+              (not ok3) and ("没找到你装的 QQ" in msg3), msg3)
+
+        half = os.path.join(work, "app3")
+        os.makedirs(os.path.join(half, live_notify.QQ_COPY_DIRNAME, "versions"))
+        io.open(os.path.join(half, live_notify.QQ_COPY_DIRNAME, "QQ.exe"), "wb").write(b"x")
+        ok4, _msg4 = live_notify.ensure_qq_copy(base_dir=half, qq_root=fake)
+        check("半拉的副本会被清掉重建（先摘链接再删）",
+              ok4 and live_notify.qq_copy_ready(
+                  os.path.join(half, live_notify.QQ_COPY_DIRNAME)))
+    finally:
+        _shutil.rmtree(work, ignore_errors=True)
+    return failures
+
+
+
 def main():
     live_notify._setup_console()          # 先切 UTF-8，否则中文输出会乱码
     path = make_config()
@@ -2501,9 +2600,9 @@ def main():
     results = {}
 
     for idx, (title, argv) in enumerate([
-        ("1/17  自检 check", ["check", "--config", path]),
-        ("2/17  彩排 test（不应真的发出去）", ["test", "--config", path]),
-        ("3/17  真实发送 send", ["send", "--config", path]),
+        ("1/18  自检 check", ["check", "--config", path]),
+        ("2/18  彩排 test（不应真的发出去）", ["test", "--config", path]),
+        ("3/18  真实发送 send", ["send", "--config", path]),
     ], 1):
         print("\n" + "#" * 70)
         print("# " + title)
@@ -2513,74 +2612,79 @@ def main():
     httpd.shutdown()
 
     print("\n" + "#" * 70)
-    print("# 4/17  触发引擎状态机")
+    print("# 4/18  触发引擎状态机")
     print("#" * 70)
     failures = run_engine_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 5/17  游戏识别（纯逻辑，不要求有游戏在跑）")
+    print("# 5/18  游戏识别（纯逻辑，不要求有游戏在跑）")
     print("#" * 70)
     failures += run_games_tests()
 
     print("\n" + "#" * 70)
-    print("# 6/17  群发失败重试")
+    print("# 6/18  群发失败重试")
     print("#" * 70)
     failures += run_send_retry_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 7/17  日志落盘前的密钥打码")
+    print("# 7/18  日志落盘前的密钥打码")
     print("#" * 70)
     failures += run_redact_tests()
 
     print("\n" + "#" * 70)
-    print("# 8/17  圆角抗锯齿")
+    print("# 8/18  圆角抗锯齿")
     print("#" * 70)
     failures += run_corner_tests()
 
     print("\n" + "#" * 70)
-    print("# 9/17  启动豁免期（防止鼠标误触）")
+    print("# 9/18  启动豁免期（防止鼠标误触）")
     print("#" * 70)
     failures += run_click_guard_tests()
 
     print("\n" + "#" * 70)
-    print("# 10/17  主题色不许被烤死在默认参数里")
+    print("# 10/18  主题色不许被烤死在默认参数里")
     print("#" * 70)
     failures += run_theme_bake_tests()
 
     print("\n" + "#" * 70)
-    print("# 11/17  模板占位符校验")
+    print("# 11/18  模板占位符校验")
     print("#" * 70)
     failures += run_template_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 12/17  单实例锁")
+    print("# 12/18  单实例锁")
     print("#" * 70)
     failures += run_single_instance_tests()
 
     print("\n" + "#" * 70)
-    print("# 13/17  控制端口认证")
+    print("# 13/18  控制端口认证")
     print("#" * 70)
     failures += run_control_auth_tests()
 
     print("\n" + "#" * 70)
-    print("# 14/17  配置安全检查")
+    print("# 14/18  配置安全检查")
     print("#" * 70)
     failures += run_config_safety_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 15/17  控件引用与创建必须对得上")
+    print("# 15/18  控件引用与创建必须对得上")
     print("#" * 70)
     failures += run_widget_presence_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 16/17  bili 订阅（配置 / 轮询 / 纯逻辑，不联网）")
+    print("# 16/18  bili 订阅（配置 / 轮询 / 纯逻辑，不联网）")
     print("#" * 70)
     failures += run_bili_tests(path)
 
     print("\n" + "#" * 70)
-    print("# 17/17  main() 的接线必须完整")
+    print("# 17/18  main() 的接线必须完整")
     print("#" * 70)
     failures += run_main_wiring_tests()
+
+    print("\n" + "#" * 70)
+    print("# 18/18  私有 QQ 副本（程序自己建，网盘版靠它\"双击就能用\"）")
+    print("#" * 70)
+    failures += run_qq_copy_tests()
 
     print("\n" + "=" * 70)
     print("命令退出码：check={check}  test={test}  send={send}".format(**results))

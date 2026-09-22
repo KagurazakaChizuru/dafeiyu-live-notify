@@ -66,20 +66,57 @@ Get-ChildItem (Join-Path $App 'napcat') -Force |
     }
 
 # --- sources and assets ----------------------------------------------------
-# 排除备份文件。**尤其是 config.json.bak*** —— 那是用户配置的备份，
-# 里面有他真实的直播间号。上一版就这么泄进包里了。
+# Skip backup files. **config.json.bak especially** - it is a copy of the
+# packager's own config and carries a real room id. It shipped once already.
 $skip = @('config.json', '_account.txt', 'gui-error.log',
           'header-light.png', 'header-dark.png')
+
+# Underscore files fall into TWO groups and must NOT be filtered with one "_*"
+# wildcard:
+#
+#   private / dev-only   _privacy.txt (real room id + control token),
+#                        _account.txt, _selftest.py, _watchtest.py,
+#                        _mock_napcat.py, _package*.ps1, _release.ps1,
+#                        _publish-netdisk.ps1, _submit-winget.ps1,
+#                        _ui_text.py                       -> never shipped
+#
+#   needed at run time   the four below. Without them the recipient cannot even
+#                        take the first step:
+#                        "first-run" bat calls app\_setup-qq-copy.ps1;
+#                        every other bat starts with "call _find-python.bat";
+#                        0-one-click.bat also calls _ensure-napcat.bat.
+#
+# The previous netdisk package used a blanket "_*" rule and dropped both groups.
+# A user double-clicked the first-run bat and got "-File argument does not
+# exist: _setup-qq-copy.ps1" - reported with a screenshot.
+#
+# KEEP THE COMMENTS IN THIS FILE ASCII - see "PowerShell script encoding" in
+# the docs. Chinese comments in a BOM-less .ps1 get decoded as ANSI by
+# PowerShell 5.1 and the parser dies. I did exactly that once while fixing this.
+$keepUnder = @('_setup-qq-copy.ps1', '_fix-qq-link.ps1', '_find-python.bat',
+               '_ensure-napcat.bat', '_account.txt.example')
 Get-ChildItem $App -File |
     Where-Object {
         $_.Name -notin $skip -and
-        # 下划线开头的都是本机工具/私密清单，一个都不能进包。
-        # _privacy.txt 装的正是房间号和 token —— 上一版它漏进去了。
-        $_.Name -notlike '_*' -and
+        ($_.Name -notlike '_*' -or $_.Name -in $keepUnder) -and
         $_.Name -notlike 'config.json*' -and
         $_.Extension -notin @('.bak', '.log', '.spec')
     } |
     ForEach-Object { Copy-Item $_.FullName (Join-Path $stage 'app') -Force }
+
+# Fail the build if a run-time script is missing, or a private file got in.
+# "User finds out after downloading" is too late to notice.
+foreach ($need in @('_setup-qq-copy.ps1', '_fix-qq-link.ps1', '_find-python.bat',
+                    '_ensure-napcat.bat')) {
+    if (-not (Test-Path (Join-Path $stage "app\$need"))) {
+        throw "netdisk package would ship without app\$need - the recipient cannot set it up."
+    }
+}
+foreach ($bad in @('_privacy.txt', '_account.txt', 'config.json')) {
+    if (Test-Path (Join-Path $stage "app\$bad")) {
+        throw "netdisk package must not contain app\$bad"
+    }
+}
 
 # only what the app actually needs at run time - not the build scripts or spec
 foreach ($f in @('app.ico', 'header-light.png', 'header-dark.png')) {
