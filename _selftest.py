@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 端到端自测 —— 不需要真 NapCat、不需要真 QQ。
@@ -2255,6 +2255,71 @@ def run_widget_presence_tests(path):
                   repr(gui.strip_ansi("\x1b[32minfo\x1b[39m 网络已连接")))
             check("没有控制码的日志行原样保留",
                   gui.strip_ansi("当前账号(1234)已登录") == "当前账号(1234)已登录")
+
+            # 机器人 QQ 的扫码窗：不能再让用户自己去 cache 里翻图片。
+            # 用假 NAPCAT_DIR + 把端口判断打桩（否则她机器上正好跑着 NapCat，
+            # 这条测试会被"已登录"当场关窗，变成一条什么也没测的绿）。
+            import shutil as _sh
+            import tempfile as _tf
+            _qr_work = _tf.mkdtemp(prefix="dfy-qr-selftest-")
+            _real_napcat = gui.NAPCAT_DIR
+            _real_port = gui.port_open
+            try:
+                _nc = os.path.join(_qr_work, "napcat")
+                os.makedirs(os.path.join(_nc, "cache"))
+                _qr = os.path.join(_nc, "cache", "qrcode.png")
+                # tk.PhotoImage 只认真的 PNG/GIF，拿空文件糊弄不过去。
+                _png = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    "_build", "header-dark.png")
+                gui.NAPCAT_DIR = _nc
+                gui.port_open = lambda *a, **k: False
+
+                def _pump(sec):
+                    _end = time.time() + sec
+                    while time.time() < _end:
+                        root.update()
+                        time.sleep(0.05)
+
+                if os.path.isfile(_png):
+                    # 1) 上次留下的过期码不许显示
+                    _sh.copy2(_png, _qr)
+                    os.utime(_qr, (time.time() - 600, time.time() - 600))
+                    gui.App._watch_qq_login(app, time.time(), deadline_seconds=1)
+                    root.update()
+                    check("扫码窗口会弹出来", app._qq_login_win is not None)
+                    _pump(2.5)
+                    check("过期的二维码不会被显示（cache 里那份是上次的）",
+                          app._qq_login_state["seen"] is None,
+                          repr(app._qq_login_state["seen"]))
+                    check("没等到码就自己关掉，不留一个空窗挂着",
+                          app._qq_login_win is None)
+
+                    # 2) 新写的码要显示出来，并且真挂在控件上
+                    os.utime(_qr, (time.time(), time.time()))
+                    gui.App._watch_qq_login(app, time.time() - 5, deadline_seconds=6)
+                    _pump(2.5)
+                    check("新写的二维码会被认到",
+                          app._qq_login_state["seen"] is not None)
+                    _imgs = []
+                    for _w in root.winfo_children():
+                        for _c in _w.winfo_children():
+                            try:
+                                if _c.cget("image"):
+                                    _imgs.append(str(_c.cget("image")))
+                            except Exception:
+                                pass
+                    check("二维码真的画在窗口里（不是只有一行提示）", bool(_imgs), repr(_imgs))
+                    check("登录成功之前窗口不关",
+                          app._qq_login_win is not None)
+                    if app._qq_login_win is not None:
+                        app._qq_login_win.destroy()
+                        app._qq_login_win = None
+                else:
+                    check("找得到用来冒充二维码的 PNG", False, _png)
+            finally:
+                gui.NAPCAT_DIR = _real_napcat
+                gui.port_open = _real_port
+                _sh.rmtree(_qr_work, ignore_errors=True)
 
             # 登录按钮点下去会建窗口、生成二维码 —— 这条路也真的走一遍。
             # 把 QrLogin 换成一个假的（不联网），二维码本身是真的 qr.py 画的。

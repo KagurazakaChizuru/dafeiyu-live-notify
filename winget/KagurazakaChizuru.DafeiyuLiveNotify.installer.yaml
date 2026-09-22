@@ -10,6 +10,6 @@ NestedInstallerFiles:
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/KagurazakaChizuru/dafeiyu-live-notify/releases/download/v1.8.1/dafeiyu-live-notify-v1.8.1.zip
-    InstallerSha256: 53A8D8567B83FD011A014A78C76ACC93EA0D92FE7C8055B02BB2245D2EC4D431
+    InstallerSha256: EFFAB7680CA1C75C4945D0A6C8D8A9E8FC6823B920E94C90704EB04434FA600B
 ManifestType: installer
 ManifestVersion: 1.6.0

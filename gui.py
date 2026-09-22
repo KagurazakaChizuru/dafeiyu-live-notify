@@ -3378,6 +3378,97 @@ class App:
     #  主题
     # ==================================================================
 
+    def _watch_qq_login(self, since, deadline_seconds=180):
+        """NapCat 要登录机器人 QQ 时，把二维码**摆在窗口里**让用户扫。
+
+        为什么非做不可：原来只在日志里写一行"用看图软件打开
+        app\\napcat\\cache\\qrcode.png"。让用户自己去找那个文件、还得会用看图
+        软件打开它 —— 那不叫登录，那是把活儿推给他。二维码是 NapCat 自己写在
+        cache 里的 PNG，这里盯着它：出现就显示、换一张就换一张、登录成功
+        （OneBot 端口起来）就自己关。
+
+        **只认这次启动之后写的码**：cache 里那份往往是上次留下的过期码，直接
+        显示等于骗人。所以比 mtime 和启动时刻。
+
+        deadline_seconds 是"多久没等到码就放弃"，测试里会调小。
+        """
+        if getattr(self, "_qq_login_win", None) is not None:
+            return
+        qr_path = os.path.join(NAPCAT_DIR, "cache", "qrcode.png")
+
+        win = tk.Toplevel(self.root)
+        self._qq_login_win = win
+        win.title("登录机器人 QQ")
+        win.configure(background=BG)
+        win.geometry("400x470")
+        win.transient(self.root)
+        tk.Label(win, text="用手机 QQ 扫这个码（登录机器人号）",
+                 background=BG, foreground=TEXT, font=(FONT, 11, "bold"),
+                 pady=10).pack()
+        holder = tk.Label(win, background="#FFFFFF")
+        holder.pack()
+        tip = tk.Label(win, text="正在等 NapCat 生成二维码 …", background=BG,
+                       foreground=MUTED, font=(FONT, 9), wraplength=350,
+                       justify="center")
+        tip.pack(fill="x", pady=(8, 2))
+        tk.Label(win, text="扫完这个窗口会自己关，以后不用再扫。\n"
+                           "（想让机器人用别的号，退出后删掉 app\\_account.txt 再开）",
+                 background=BG, foreground=MUTED, font=(FONT, 8),
+                 justify="center").pack()
+
+        state = {"timer": None, "seen": None, "img": None,
+                 "deadline": time.time() + deadline_seconds}
+        self._qq_login_state = state          # 自检会看这个
+
+        def stop():
+            if state["timer"]:
+                try:
+                    # 老坑：after_cancel 在界面重建后会报 can't delete Tcl command，
+                    # 所以直接调 Tcl（跟 B站扫码窗一个写法）。
+                    self.root.tk.call("after", "cancel", state["timer"])
+                except tk.TclError:
+                    pass
+                state["timer"] = None
+
+        def close(msg=None):
+            stop()
+            self._qq_login_win = None
+            try:
+                win.destroy()
+            except tk.TclError:
+                pass
+            if msg:
+                core.log(msg)
+
+        def tick():
+            if port_open(3000):
+                close("机器人 QQ 已登录，NapCat 就绪")
+                return
+            try:
+                mtime = os.path.getmtime(qr_path)
+            except OSError:
+                mtime = None
+            if mtime is not None and mtime >= since and mtime != state["seen"]:
+                state["seen"] = mtime
+                try:
+                    img = tk.PhotoImage(file=qr_path)
+                    # **必须留个引用**：PhotoImage 被 GC 掉之后图会变成空白。
+                    state["img"] = img
+                    holder.configure(image=img, width=img.width(),
+                                     height=img.height())
+                    tip.configure(text="用手机 QQ 扫一下。码过期 NapCat 会换一张，"
+                                       "这里跟着换。")
+                except Exception as exc:
+                    tip.configure(text="二维码读不出来：{}".format(exc))
+            if state["seen"] is None and time.time() > state["deadline"]:
+                close("等了 {} 秒没等到机器人 QQ 的二维码 —— 详见「运行日志」。".format(
+                    int(deadline_seconds)))
+                return
+            state["timer"] = self.root.after(1000, tick)
+
+        win.protocol("WM_DELETE_WINDOW", lambda: close())
+        state["timer"] = self.root.after(800, tick)
+
     def toggle_theme(self):
         """在浅色 / 深色之间切换，并记住选择。"""
         # 防重入：重建界面期间如果又收到一次点击，会递归拆建控件，
@@ -3469,15 +3560,18 @@ class App:
         def work():
             # --- 1. 确保 NapCat 在跑 ---
             if not port_open(3000):
+                _napcat_since = time.time()
                 ok, msg = start_napcat()
                 if not ok:
                     return "error", msg
+                # 二维码不再让用户自己去文件里翻 —— 直接弹窗摆给他扫。
+                self.root.after(0, lambda t=_napcat_since: self._watch_qq_login(t))
                 core.log("已拉起 NapCat，等待它登录并开放接口（最多 90 秒）…")
                 if not wait_for_port(3000, 90, should_cancel=stop_event.is_set):
                     return "error", ("NapCat 没能在 90 秒内就绪。\n\n"
-                                     "要扫码登录就用浏览器打开：\n"
-                                     "    http://127.0.0.1:6099/webui\n"
-                                     "或用看图软件打开 app\\napcat\\cache\\qrcode.png\n\n"
+                                     "二维码窗口应该已经弹出来了 —— 用手机 QQ 扫一下。\n"
+                                     "没看到窗口就开浏览器进 http://127.0.0.1:6099/webui\n"
+                                     "（这两条等价，都只是给 NapCat 登录用）。\n\n"
                                      "扫一次以后不用再扫。过程见「运行日志」。")
                 core.log("NapCat 已就绪")
             else:
