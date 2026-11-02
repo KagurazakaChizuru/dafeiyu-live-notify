@@ -525,9 +525,19 @@ def guess_bilibili_room_id(link):
     """从直播间链接里抠出房间号，省得用户再填一遍。
 
     https://live.bilibili.com/12345678?spm=xxx   ->   12345678
+
+    也接住另一种情况：有人干脆只贴了一串数字（房间号本身）。2026-11-02
+    一份客户日志里，界面上勾着"直播间轮询"，实际却没认出房间号 —— 他填的
+    多半不是完整链接。宁可多认一种写法，也别让检测静默失效。
     """
-    m = re.search(r"live\.bilibili\.com/(\d+)", link or "")
-    return int(m.group(1)) if m else None
+    text = (link or "").strip()
+    m = re.search(r"live\.bilibili\.com/(\d+)", text)
+    if m:
+        return int(m.group(1))
+    m = re.fullmatch(r"(\d{3,12})", text)
+    if m:
+        return int(m.group(1))
+    return None
 
 
 def format_duration(seconds):

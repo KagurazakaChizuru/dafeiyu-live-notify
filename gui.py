@@ -1661,6 +1661,35 @@ def read_account():
         return ""
 
 
+def remember_account(cfg):
+    """把机器人 QQ 号记进 `_account.txt`，下次启动走快速登录。
+
+    为什么非做不可：网盘包里**没有**这个文件（它是私有数据，打包时被排掉），
+    于是 NapCat 不知道该用哪个号，只能弹二维码让人扫。2026-11-02 那位用户
+    22 分钟里重启 5 次、扫了 5 次码 —— 每重启一次就得摸一次手机。
+
+    号是从 get_login_info 里拿的，登录成功后立刻写。以后启动带着它传给
+    NapCat（`-q 号`），走快速登录，不用再扫。
+    """
+    try:
+        ok, data = core.OneBot(cfg["onebot"]).get_login_info()
+    except Exception:
+        return ""
+    if not ok or not isinstance(data, dict):
+        return ""
+    uid = str(data.get("user_id") or "").strip()
+    if not uid.isdigit():
+        return ""
+    try:
+        if read_account() != uid:
+            with open(ACCOUNT_FILE, "w", encoding="utf-8") as fh:
+                fh.write(uid + "\n")
+            core.log("已记住机器人 QQ 号 {}，下次启动不用再扫码。".format(uid))
+    except OSError:
+        pass
+    return uid
+
+
 def port_open(port, host="127.0.0.1", timeout=0.5):
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -3601,6 +3630,28 @@ class App:
 
         def work():
             # --- 1. 确保 NapCat 在跑 ---
+            def napcat_alive():
+                """端口能连上不等于"我们的 NapCat 活着"。"""
+                try:
+                    ok, info = core.OneBot(cfg["onebot"]).get_login_info()
+                except Exception:
+                    return False
+                return bool(ok) and isinstance(info, dict) and bool(info.get("user_id"))
+
+            if port_open(3000) and not napcat_alive():
+                # 3000 端口通、但取不到登录信息 —— 两种可能，处理方式一样：
+                #   · 上次被强杀留下的僵尸 NapCat（QQ 进程还在，接口是死的）
+                #   · 别的程序抢了 3000（实测会回 401，日志里看着像"连不上 NapCat"）
+                # 不做这一步，程序会心安理得地复用一个死接口，界面显示"在监控"，
+                # 群里一条消息都收不到。
+                core.log("3000 端口被占着，但取不到登录信息，按僵尸处理，先清掉。", "WARN")
+                stop_napcat()
+                deadline = time.time() + 10
+                while time.time() < deadline and port_open(3000):
+                    time.sleep(0.5)
+                if port_open(3000):
+                    core.log("3000 端口 10 秒内没释放，仍然继续尝试启动。", "WARN")
+
             if not port_open(3000):
                 _napcat_since = time.time()
                 ok, msg = start_napcat()
@@ -3629,6 +3680,9 @@ class App:
                 self._set_state(STATE_IDLE)
                 messagebox.showerror("启动失败", msg)
                 return
+
+            # 登录成功一次就把号记下来，下次不用再扫码。
+            remember_account(cfg)
 
             # --- 2. 起监控线程 ---
             def monitor():
@@ -5238,10 +5292,12 @@ class App:
 
         def quit_all():
             win.destroy()
+            # **先记一行再说**。原来只在"监控中"时才打这条日志，于是空闲状态
+            # 下退出等于不留痕 —— 日志戛然而止，看起来和崩溃一模一样。
+            core.log("退出中，正在关闭 NapCat …")
             if self.state == STATE_RUNNING:
                 if self.stop_event:
                     self.stop_event.set()
-                core.log("退出中，正在关闭 NapCat …")
                 stop_napcat()
             self._teardown_and_destroy()
 
@@ -5291,6 +5347,25 @@ def main():
     # 表现是"日志戛然而止、锁名片还在"。faulthandler 至少把栈落到
     # logs\crash-*.log，否则下次还是只能猜。
     core._enable_crash_log()
+
+    # 界面也要单实例。原来单实例锁只加在 cmd_watch 上，双击图标照样能开出
+    # 两份界面 —— 两份都会去拉 NapCat、抢同一个 QQ 号。2026-11-02 一份客户
+    # 日志里 14:29:34 和 14:29:46 就是两次「界面已启动」。
+    gui_lock = core.SingleInstance(os.path.join(HERE, "logs", "app.lock.gui"))
+    if not gui_lock.acquire():
+        # 日志文件是在 App.__init__ 里才打开的，这里得自己先开一次，
+        # 否则这行提示写不进文件（第一次测就是这么哑掉的）。
+        core._open_log_file()
+        core.log("已经有一份界面在运行了，本次不重复启动。", "WARN")
+        try:
+            messagebox.showwarning(
+                "已经开着",
+                "大肥鱼直播姬已经在一个窗口里运行了 ——\n"
+                "请到任务栏或右下角托盘里找它，不用再双击一次。")
+        except Exception:
+            pass
+        return 0
+
     try:
         root = tk.Tk()
     except tk.TclError as exc:
@@ -5324,6 +5399,9 @@ def main():
 
     root.report_callback_exception = on_error
     root.mainloop()
+    gui_lock.release()
+    # 收尾留个记号：以后"日志最后一行是什么"就能区分正常退出和猝死。
+    core.log("已退出。")
     return 0
 
 

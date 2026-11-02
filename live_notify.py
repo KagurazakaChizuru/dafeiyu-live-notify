@@ -85,7 +85,7 @@ except ImportError:                # 缺文件时群聊整体降级
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.8.3"
+VERSION = "1.8.4"
 
 def _resolve_base_dir():
     """确定**数据目录**（config.json / logs / napcat 所在处）。
@@ -2998,7 +2998,9 @@ def cmd_watch(cfg, stop_event=None):
         if not room_id:
             log("直播间轮询已启用，但没能确定房间号。请在 message.link 里写完整的"
                 "直播间链接（如 https://live.bilibili.com/12345），或直接填 "
-                "trigger.room_id。", "WARN")
+                "trigger.room_id。\n"
+                "  **在修好之前，只有 OBS 推流和快捷键会触发通知** —— "
+                "别以为开播会自动播报。", "WARN")
         else:
             platform = triggers.PlatformWatcher(
                 room_id=room_id,
