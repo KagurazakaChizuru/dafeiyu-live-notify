@@ -31,11 +31,21 @@
 param(
     [string]$Version,
     [string]$Asset,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [string]$Proxy
 )
 
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
+
+# Machines that need a proxy to reach github.com (this one does: direct 443 is
+# blocked, Clash listens on 127.0.0.1:33210). Invoke-RestMethod only reads the
+# *system* proxy unless it is set here - without this the script dies with a
+# connect timeout before it can even say GH_TOKEN is missing.
+if ($Proxy) {
+    [System.Net.WebRequest]::DefaultWebProxy = New-Object System.Net.WebProxy($Proxy, $true)
+    Write-Host "proxy: $Proxy"
+}
 
 # --- 1. version: from the parameter, else from live_notify.py --------------
 if (-not $Version) {
