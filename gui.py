@@ -1690,6 +1690,17 @@ def strip_ansi(text):
     return _ANSI_RE.sub("", text)
 
 
+def _is_qr_block(line):
+    """这一行是不是二维码的方块字符。
+
+    NapCat 每次重登都刷 17 行方块（2026-11-02 那份日志里，33 个二维码占了
+    全日志的三分之一）。控制台里看得见就够了，没必要往盘上留。
+    """
+    if len(line) < 10:
+        return False
+    return sum(1 for ch in line if ch in "█▄▀") >= 8
+
+
 def start_napcat():
     """在**后台无窗口**启动 NapCat，输出直接送进界面日志。
 
@@ -1712,6 +1723,10 @@ def start_napcat():
 
     if port_open(3000):
         return True, "NapCat 已经在运行"
+
+    stale = cleanup_stale_napcat()
+    if stale:
+        core.log("先清掉了上次残留的 {} 个 QQ 副本进程。".format(stale), "WARN")
 
     # 私有 QQ 副本不在就**自己建**，别让用户先去跑脚本。
     #
@@ -1748,7 +1763,7 @@ def start_napcat():
         try:
             for line in proc.stdout:
                 line = line.rstrip()
-                if line:
+                if line and not _is_qr_block(line):
                     core.log("[NapCat] " + strip_ansi(line))
         except Exception:
             pass
@@ -1793,6 +1808,33 @@ def stop_napcat():
                            capture_output=True, creationflags=_no_window_flags())
         except OSError:
             pass
+
+
+def cleanup_stale_napcat():
+    """清掉上一次没退干净的私有 QQ 副本，返回清掉的进程数。
+
+    为什么需要：上一份 NapCat 还占着同一个 QQ 号时，新的这份会报
+    "当前账号已登录，无法重复登录"，然后每 90 秒刷一个二维码（2026-11-02
+    一个用户的日志里，18 分钟刷了 19 个）。与其让用户自己开任务管理器，
+    不如每次拉起前先收拾干净。
+
+    **只动 qq-napcat 那一份**：用户自己的 QQ、别的机器人都不碰。所以这里
+    不调 taskkill /IM QQ.exe，宁可多写一段 PowerShell 也不能误杀。
+    """
+    ps = ("$p = @(Get-CimInstance Win32_Process -Filter \"Name='QQ.exe'\" | "
+          "Where-Object { $_.ExecutablePath -like '*qq-napcat*' }); "
+          "$p | ForEach-Object { Stop-Process -Id $_.ProcessId -Force "
+          "-ErrorAction SilentlyContinue }; $p.Count")
+    try:
+        out = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                             capture_output=True, timeout=30,
+                             creationflags=_no_window_flags())
+    except (OSError, subprocess.SubprocessError):
+        return 0
+    try:
+        return int((out.stdout or b"").decode("utf-8", "replace").strip() or 0)
+    except (ValueError, TypeError):
+        return 0
 
 
 def wait_for_port(port, seconds, should_cancel=None):
@@ -2796,7 +2838,7 @@ class App:
         self.lbl_obs.pack(anchor="w", padx=(24, 0), pady=(3, 14))
 
         check(card, self.var_hotkey_on, "③ 全局快捷键（兜底）")
-        card_hint(card, "任何情况下按一下就推。", indent=24, pady=(2, 6))
+        card_hint(card, "按两下才推：第一下只是确认，8 秒内再按一下才发。", indent=24, pady=(2, 6))
         hkrow = tk.Frame(card, background=CARD)
         hkrow.pack(anchor="w", padx=(24, 0), pady=(0, 14))
         ttk.Entry(hkrow, textvariable=self.var_hotkey, width=16,
@@ -5245,6 +5287,10 @@ class App:
 
 
 def main():
+    # 硬崩（访问违例、栈溢出）不走 Tk 的异常钩子，也不会写 gui-error.log ——
+    # 表现是"日志戛然而止、锁名片还在"。faulthandler 至少把栈落到
+    # logs\crash-*.log，否则下次还是只能猜。
+    core._enable_crash_log()
     try:
         root = tk.Tk()
     except tk.TclError as exc:

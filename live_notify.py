@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import faulthandler
 import hmac
 import io
 import json
@@ -84,7 +85,7 @@ except ImportError:                # 缺文件时群聊整体降级
 
 APP_NAME = "dafeiyu-live-notify"        # 技术标识：控制端口、日志、JSON 字段用
 DISPLAY_NAME = "大肥鱼直播姬"             # 界面与文档里显示的名字
-VERSION = "1.8.2"
+VERSION = "1.8.3"
 
 def _resolve_base_dir():
     """确定**数据目录**（config.json / logs / napcat 所在处）。
@@ -110,6 +111,30 @@ LOG_DIR = os.path.join(BASE_DIR, "logs")
 SUB_STATE_PATH = os.path.join(LOG_DIR, "subscribe-state.json")
 #: 群聊记着"每个群读到哪条了"和"有哪些提醒"，重启不能丢
 CHAT_STATE_PATH = os.path.join(LOG_DIR, "chat-state.json")
+
+
+_CRASH_LOG = {"fh": None}
+
+
+def _enable_crash_log():
+    """把 C 层崩溃的栈落到 logs\\crash-日期.log。
+
+    为什么需要：Tk 的回调异常有 `report_callback_exception` 接着，能在
+    gui-error.log 里留痕；但访问违例、栈溢出这类**进程级**故障不走 Python
+    的异常钩子，表现就是"日志戛然而止、锁名片还在、什么都没有"。
+    2026-11-02 一个用户的日志两次这么死掉，只能靠猜。
+    """
+    if _CRASH_LOG["fh"] is not None:
+        return
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        path = os.path.join(LOG_DIR, "crash-{}.log".format(
+            datetime.now().strftime("%Y%m%d")))
+        fh = open(path, "a", encoding="utf-8")
+        faulthandler.enable(file=fh, all_threads=True)
+        _CRASH_LOG["fh"] = fh
+    except Exception:                  # 日志都开不了的时候别把自己拦在门外
+        pass
 
 # --------------------------------------------------------------------------
 #  私有 QQ 副本：NapCat 跑在它上面，不占用用户自己那个 QQ
@@ -2932,12 +2957,40 @@ def cmd_watch(cfg, stop_event=None):
         httpd = start_control_server(cfg, manual_trigger, status)
 
     # ---------------- 启动各个触发源 ----------------
+    _obs_said = {"text": None}
+
+    def obs_status(text):
+        # OBS 没开的时候这个回调每 20 秒回来一次"未启用"，一整天几百行一样
+        # 的字，把真正的开播和推送全淹了（2026-11-02 那份日志里占 14%）。
+        # 只在文字变了才记。
+        if text == _obs_said["text"]:
+            return
+        _obs_said["text"] = text
+        log("OBS：{}".format(text))
+
     if triggers is not None and tg.get("on_obs_stream"):
-        obs = triggers.ObsWatcher(fire, stop_event,
-                                  on_status=lambda t: log("OBS：{}".format(t)))
+        obs = triggers.ObsWatcher(fire, stop_event, on_status=obs_status)
         obs.start()
+    # ---------------- 快捷键：先按一下"举手"，8 秒内再按一下才真发 ----------------
+    #
+    # 为什么要两道：这键在任何程序里都生效，而误触的代价是往**所有**群里
+    # @全体成员 炸一条开播文案。2026-11-02 一个用户就是这么在已经下播的时候
+    # 把两个群（其中一个是禁言通知群）炸了一遍，群友说"机器人出bug了"。
+    # 多按一下，比在群里道歉便宜。
+    _hot_armed = {"until": 0.0}
+
+    def manual_hotkey(reason):
+        now = time.time()
+        if now <= _hot_armed["until"]:
+            _hot_armed["until"] = 0.0
+            log("快捷键已确认，开始推送。")
+            fire(reason + "，已确认")
+            return
+        _hot_armed["until"] = now + 8.0
+        log("收到快捷键：8 秒内再按一次才会发送（防止误触），本次不发。", "WARN")
+
     if triggers is not None and tg.get("hotkey"):
-        hotkey = triggers.HotkeyListener(tg["hotkey"], fire, stop_event,
+        hotkey = triggers.HotkeyListener(tg["hotkey"], manual_hotkey, stop_event,
                                          on_status=lambda t: log("快捷键：{}".format(t)))
         hotkey.start()
     if triggers is not None and tg.get("on_platform_live"):
@@ -3491,6 +3544,7 @@ def cmd_groups(cfg):
 def main(argv=None):
     _setup_console()
     _open_log_file()
+    _enable_crash_log()
 
     parser = argparse.ArgumentParser(
         prog="live_notify.py",

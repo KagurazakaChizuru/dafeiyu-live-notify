@@ -12,7 +12,7 @@
   1. ObsWatcher     —— 连上 OBS 的 obs-websocket，精确捕获"开始推流"事件。
                        只有 OBS 支持；B站直播姬 / 抖音直播伴侣没开放接口。
   2. HotkeyListener —— 全局快捷键（Win32 RegisterHotKey）。任何软件下都有效，
-                       开播时按一下就推送。
+                       开播时连按两下就推送。
   3. CooldownGate   —— 冷却闸门，避免多种触发源叠加导致重复发。
 
 本模块不依赖任何第三方库，也不 import live_notify（避免循环依赖），
@@ -473,7 +473,7 @@ class HotkeyListener(threading.Thread):
         pretty = "+".join(p.upper() if len(p) == 1 else p.capitalize()
                           for p in self.spec.replace(" ", "").split("+"))
         self.on_status("快捷键 {} 已就绪".format(pretty))
-        _log("全局快捷键 {} 已注册，按下即推送".format(pretty))
+        _log("全局快捷键 {} 已注册，连按两下才推送（第一下只是确认）".format(pretty))
 
         msg = wintypes.MSG()
         try:

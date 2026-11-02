@@ -77,6 +77,12 @@ NON_GAME_PROCESSES = {
     "qq", "wechat", "tim", "dingtalk", "wps", "wpscloudsvr", "wegame",
     "steam", "steamwebhelper", "dsh desktop", "dsh-pet-standalone-webm-chat",
     "python", "pythonw",
+    # 主播开播前开着的一圈工具。它们全是 Unity 窗口（UnityWndClass 直接
+    # +60 分、阈值 55），不给名字就等着往群里播"现在打《VBridger》" ——
+    # 2026-11-02 一个用户的日志里就有《VBridger》和《OBS Studio》两条。
+    "obs", "obs64", "obs32",
+    "vbricer", "vbridger", "vtuberstudio", "vtubestudio", "warudo",
+    "jianyingpro", "capcut", "bim", "livehime", "bilibili",
 }
 
 #: 场景文件里那些"不是游戏名"的源名（"游戏进程 3"、"窗口捕捉 1"），
@@ -616,6 +622,12 @@ def _score_window(win, index, names, ignore, screen_area, fg_hwnd):
     # 全屏
     if screen_area and win["area"] >= screen_area * 0.7:
         score += 25
+
+    # 小得不像游戏窗口的，一票扣回去。面捕/VTuber 的控制条经常是
+    # 160x28 这种尺寸，却挂着 UnityWndClass 的类名 —— 光靠类名就播报，
+    # 群里就会看到"换游戏了，现在打《VBridger》"。
+    if screen_area and win.get("area") and win["area"] < screen_area * 0.02:
+        score -= 45
 
     # 占内存大（游戏通常吃 1 GB 以上）
     if _process_memory(win["pid"]) > 800 * 1024 * 1024:
